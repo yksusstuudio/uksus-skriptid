@@ -16,12 +16,11 @@ var GITHUBI_VOTI = 'PANE_SIIA_GITHUBI_VOTI';
 
 var HOIDLA = 'https://api.github.com/repos/yksusstuudio/uksus-skriptid/contents/';
 var SEADED = 'uuendaja.json';
+var VAHE = 1;                                                // mitme minuti järel kontrollib (Erik 27.10: et oleks kohe)
 
 function paigalda() {
-  ScriptApp.getProjectTriggers().forEach(function (t) {
-    if (t.getHandlerFunction() === 'uuenda') ScriptApp.deleteTrigger(t);
-  });
-  ScriptApp.newTrigger('uuenda').timeBased().everyMinutes(15).create();
+  PropertiesService.getScriptProperties().deleteProperty('vahe');
+  kaivitus_();
   var tulemus = uuenda();
   Logger.log('Valmis. ' + tulemus);
 }
@@ -30,6 +29,7 @@ function uuenda() {
   var lukk = LockService.getScriptLock();
   if (!lukk.tryLock(1000)) return 'Teine uuendus juba käib.';
   try {
+    kaivitus_();
     return uuenda_();
   } catch (e) {
     teataViga_(String(e && e.message || e));
@@ -37,6 +37,17 @@ function uuenda() {
   } finally {
     lukk.releaseLock();
   }
+}
+
+// Kontrolli ajastus. Uuendaja uus versioon saab vahet muuta ilma, et Erik peaks „paigalda“ uuesti käivitama.
+function kaivitus_() {
+  var omad = PropertiesService.getScriptProperties();
+  if (omad.getProperty('vahe') === String(VAHE)) return;
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'uuenda') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('uuenda').timeBased().everyMinutes(VAHE).create();
+  omad.setProperty('vahe', String(VAHE));
 }
 
 // Projekti ID: TABEL = Eriku tabeli skript (meeles skripti seadetes), ISE = see uuendaja, muidu ID ise.
@@ -61,6 +72,10 @@ function uuenda_() {
     omad.deleteProperty('rasi');
   }
 
+  // Iga minut: üks väike päring. Kui hoidlas pole uut muudatust, rohkem midagi ei tehta.
+  var muudatus = lae_('', 'https://api.github.com/repos/yksusstuudio/uksus-skriptid/commits/main', 'application/vnd.github.sha').trim();
+  if (muudatus && omad.getProperty('muudatus') === muudatus) return 'Uut versiooni pole.';
+
   var seaded = JSON.parse(lae_(SEADED));
   var uued = [];                                             // { s: sihtmärk, tekst, rasi }
   seaded.sihtmargid.forEach(function (s) {
@@ -71,7 +86,7 @@ function uuenda_() {
     var rasi = rasi_(tekst);
     if (omad.getProperty('rasi:' + s.nimi) !== rasi) uued.push({ s: s, tekst: tekst, rasi: rasi });
   });
-  if (!uued.length) return 'Uut versiooni pole.';
+  if (!uued.length) { omad.setProperty('muudatus', muudatus); return 'Uut versiooni pole.'; }
 
   // Iga projekt korraga: üks lugemine, üks kirjutamine. Uuendaja ise viimasena.
   var projektid = [];
@@ -93,6 +108,7 @@ function uuenda_() {
   });
 
   omad.deleteProperty('viga');
+  omad.setProperty('muudatus', muudatus);
   if (!tehtud.length) return 'Uued versioonid olid juba sees.';
   MailApp.sendEmail(Session.getEffectiveUser().getEmail(), 'Skriptid on uuendatud: ' + tehtud.join(', '),
     'Uus versioon on sees: ' + tehtud.join(', ') + '. Sinult pole midagi vaja teha.\n\nTeisi faile ma ei puutunud.');
@@ -116,12 +132,12 @@ function peidetud_(u, praegu, omad) {
   return tekst;
 }
 
-function lae_(tee) {
+function lae_(tee, aadress, kuju) {
   var voti = PropertiesService.getScriptProperties().getProperty('GITHUBI_VOTI');
-  var r = UrlFetchApp.fetch(HOIDLA + encodeURI(tee) + '?ref=main', { muteHttpExceptions: true,
-    headers: { Authorization: 'Bearer ' + voti, Accept: 'application/vnd.github.raw', 'X-GitHub-Api-Version': '2022-11-28' } });
+  var r = UrlFetchApp.fetch(aadress || HOIDLA + encodeURI(tee) + '?ref=main', { muteHttpExceptions: true,
+    headers: { Authorization: 'Bearer ' + voti, Accept: kuju || 'application/vnd.github.raw', 'X-GitHub-Api-Version': '2022-11-28' } });
   if (r.getResponseCode() === 401) throw new Error('GitHubi lugemisvõti ei kehti enam (aegus või kustutati). Tee uus võti ja kirjuta see koodi ülaossa GITHUBI_VOTI reale, siis käivita „paigalda“.');
-  if (r.getResponseCode() !== 200) throw new Error('Faili ' + tee + ' ei saanud GitHubist kätte (kood ' + r.getResponseCode() + ').');
+  if (r.getResponseCode() !== 200) throw new Error('Faili ' + (tee || 'muudatuste nimekiri') + ' ei saanud GitHubist kätte (kood ' + r.getResponseCode() + ').');
   return r.getContentText('UTF-8');
 }
 
