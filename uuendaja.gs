@@ -110,8 +110,6 @@ function uuenda_() {
   omad.deleteProperty('viga');
   omad.setProperty('muudatus', muudatus);
   if (!tehtud.length) return 'Uued versioonid olid juba sees.';
-  MailApp.sendEmail(Session.getEffectiveUser().getEmail(), 'Skriptid on uuendatud: ' + tehtud.join(', '),
-    'Uus versioon on sees: ' + tehtud.join(', ') + '. Sinult pole midagi vaja teha.\n\nTeisi faile ma ei puutunud.');
   return 'Uuendasin: ' + tehtud.join(', ') + '.';
 }
 
