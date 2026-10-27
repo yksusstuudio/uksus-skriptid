@@ -1,0 +1,31 @@
+{
+  "sihtmargid": [
+    {
+      "nimi": "Kuu harjutus",
+      "projekt": "TABEL",
+      "tunnus": "var KuuHarjutus = (function",
+      "allikas": "kuu-harjutus-skript.gs",
+      "lopp": "SKRIPTI LÕPP"
+    },
+    {
+      "nimi": "Rühmatrennide hinnalugeja",
+      "projekt": "TABEL",
+      "tunnus": "ÜKSUS – Arhiiv",
+      "allikas": "hinnalugeja.gs",
+      "lopp": "HINNALUGEJA LÕPP",
+      "peidetud": [
+        {
+          "kohataide": "__BILANSS_FAILI_ID__",
+          "muster": "fileId: \"([A-Za-z0-9_-]{25,})\""
+        }
+      ]
+    },
+    {
+      "nimi": "Kuu harjutuse uuendaja",
+      "projekt": "ISE",
+      "tunnus": "Kuu harjutuse uuendaja",
+      "allikas": "uuendaja.gs",
+      "lopp": "UUENDAJA LÕPP"
+    }
+  ]
+}
