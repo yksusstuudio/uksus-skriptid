@@ -1,6 +1,16 @@
 /*************************************************************************************
- *  ÜKSUS – Arhiiv & tähtajad & TASUD  (v13)
+ *  ÜKSUS – Arhiiv & tähtajad & TASUD  (v14)
  *  -----------------------------------------------------------------------------
+ *  UUS v14: iga trennigrupi (kalisteenika, swed, alfa kolmik, lapsed) lõppu võib
+ *  panna kolmanda ploki "Ühekordsed" (pealkiri veerus B, nt pärast "1x nädalas"
+ *  nimekirja). See on AINULT nimekiri ühekordsete piletitega püsikülastajatest:
+ *  A = number (tekib ise), B = nimi, C = kehtib ("1x"), D = kommentaar.
+ *  Skript EI tee nende ridadega mitte midagi: ei logi makseid, ei pane "Tasuda
+ *  tuleb" ega "1x pääsmed" ritta, ei arhiveeri, ei värvi, ei saada meile, ei pane
+ *  linnukest, Rühmavahetus / Pikenda tasuta / Suvepaus ei näe neid.
+ *  Plokk kestab kuni järgmise grupi pealkirjani (või "nädalas" reani).
+ *  v14: lahtris F2 = kõigi klientide arv kõigist gruppidest kokku (2x, 1x ja
+ *  Ühekordsed). Uueneb kohe, kui lisad/kustutad nime veerus B, ja igal ▶ Run / öösel.
  *  UUS v13: lapsevanemate KORDUSMEELDETULETUS. Veerg H (linnuke) laste ridadel:
  *  kui linnuke on peal ja pääse on lõppenud (C kuupäeva pole uuendatud), saadetakse
  *  järgmisel esmaspäeva hommikul üks kordusmeeldetuletus Stebby linkidega.
@@ -41,6 +51,7 @@ var CONFIG = {
   colA: 1, colB: 2, colC: 3, colD: 4,
   colE: 5, colF: 6, colG: 7,   // E=meeldetuletaja(email), F=keel, G=lapsevanema nimi
   colH: 8,                     // v13: H=kordusmeeldetuletuse linnuke (ainult lapsed)
+  countCell: "F2",             // v14: kõigi klientide arv kokku
   topListStartRow: 4,          // varuvariant, kui silti "Tasuda Tuleb" ei leitud
   labels: { dropIn: "ühekordsed", dueList: "tasuda tuleb" },
   scanLimit: 15,
@@ -97,12 +108,14 @@ var CONFIG = {
 var COMMA_FORMULA =
   '=MAP(INDIRECT("B"&ROW()&":B"), SCAN(0, INDIRECT("B"&ROW()&":B"), ' +
   'LAMBDA(count, name, IF(OR(name="", EXACT(name, UPPER(name)), ' +
-  'ISNUMBER(SEARCH("nädalas", name))), 0, count+1))), ' +
+  'ISNUMBER(SEARCH("nädalas", name)), LOWER(TRIM(name))="ühekordsed", ' +
+  'LOWER(TRIM(name))="ühekordsed:"), 0, count+1))), ' +
   'LAMBDA(name, val, IF(OR(name="", val=0), "", val)))';
 var SEMI_FORMULA =
   '=MAP(INDIRECT("B"&ROW()&":B"); SCAN(0; INDIRECT("B"&ROW()&":B"); ' +
   'LAMBDA(count; name; IF(OR(name=""; EXACT(name; UPPER(name)); ' +
-  'ISNUMBER(SEARCH("nädalas"; name))); 0; count+1))); ' +
+  'ISNUMBER(SEARCH("nädalas"; name)); LOWER(TRIM(name))="ühekordsed"; ' +
+  'LOWER(TRIM(name))="ühekordsed:"); 0; count+1))); ' +
   'LAMBDA(name; val; IF(OR(name=""; val=0); ""; val)))';
 
 /* ============================ MENÜÜ + AVAMISE TEADE ============================ */
@@ -145,7 +158,10 @@ function onEdit(e) {
     // v13: uus laps veerus B (kirjutatud või kleebitud) -> linnuke veergu H kohe
     if (e.range.getColumn() <= CONFIG.colB && e.range.getLastColumn() >= CONFIG.colB) {
       try {
-        if (e.range.getLastRow() >= findFirstGroupRow_(sh)) ensureReminderCheckboxes_(sh);
+        if (e.range.getLastRow() >= findFirstGroupRow_(sh)) {
+          ensureReminderCheckboxes_(sh);
+          try { updateClientCount_(sh); } catch (errCnt) {}   // v14: F2 klientide arv
+        }
       } catch (errCb) {}
     }
 
@@ -167,6 +183,7 @@ function onEdit(e) {
       if (oldNm == null || newNm == null || String(oldNm).trim() === "" || String(newNm).trim() === "") return;
       if (isTitle_(oldNm) || isTitle_(newNm)) return;
       if (row < findFirstGroupRow_(sh)) return;
+      if (isOneOffHeader_(oldNm) || isOneOffHeader_(newNm) || inOneOff_(sh, row)) return; // v14
       var lockN = LockService.getDocumentLock();
       if (lockN.tryLock(3000)) { try { carryNameInSnapshot_(sh, row, oldNm, newNm); } finally { lockN.releaseLock(); } }
       return;
@@ -180,6 +197,7 @@ function onEdit(e) {
     // (2b) KUUPÄEV muudetud OTSE grupi-sektsioonis (allpool nimekirja):
     //      kui uus kuupäev ei ole enam üle tähtaja (või on "1x"/tühi), eemalda punane.
     if (row >= kr) {
+      if (inOneOff_(sh, row)) return;   // v14: "Ühekordsed" plokk – ei midagi
       var val2b = e.range.getValue();
       var tz2b = Session.getScriptTimeZone();
       var today2b = new Date();
@@ -251,6 +269,7 @@ function syncTopListFromSource_(sh, row, value, today) {
   var name = String(sh.getRange(row, CONFIG.colB).getValue()).trim();
   if (!name || isTitle_(name)) return;
   var b = sh.getRange(1, CONFIG.colB, row, 1).getValues();
+  if (oneOffMask_(b)[row - 1]) return;   // v14
   var grp = "";
   for (var r = row - 1; r >= 1; r--) if (isGroupHeader_(b[r - 1][0])) { grp = String(b[r - 1][0]).toLowerCase().trim(); break; }
   if (!grp) return;
@@ -279,8 +298,9 @@ function setSourceBackground_(sh, name, grp, color) {
     if (isGroupHeader_(b[r - 1][0]) && String(b[r - 1][0]).toLowerCase().trim() === grp) { gStart = r; break; }
   if (gStart < 0) return;
   for (r = gStart + 1; r <= n; r++) if (isGroupHeader_(b[r - 1][0])) { gEnd = r - 1; break; }
+  var oo = oneOffMask_(b);   // v14
   for (r = gStart + 1; r <= gEnd; r++)
-    if (String(b[r - 1][0]) === String(name)) { sh.getRange(r, CONFIG.colC).setBackground(color); return; }
+    if (!oo[r - 1] && String(b[r - 1][0]) === String(name)) { sh.getRange(r, CONFIG.colC).setBackground(color); return; }
 }
 
 /* Nummerdab "Tasuda tuleb" nimekirja read uuesti (A veerus 1,2,3…),
@@ -357,8 +377,9 @@ function writeDateToSource_(sh, name, grp, value) {
   if (!gStart) return false;
   var gEnd = n;
   for (r = gStart + 1; r <= n; r++) if (isGroupHeader_(b[r - 1][0])) { gEnd = r - 1; break; }
+  var oo = oneOffMask_(b);   // v14
   for (r = gStart + 1; r <= gEnd; r++)
-    if (String(b[r - 1][0]) === String(name)) {
+    if (!oo[r - 1] && String(b[r - 1][0]) === String(name)) {
       var cell = sh.getRange(r, CONFIG.colC);
       cell.setValue(value);
       cell.setBackground(null);   // vaikimisi punane maha; kutsuja paneb tagasi kui veel üle tähtaja
@@ -595,12 +616,37 @@ function isTitle_(name) {
   if (name === null || name === undefined) return false;
   var s = String(name).trim();
   if (s === "") return false;
+  if (isOneOffHeader_(s)) return false;   // v14: "Ühekordsed" ploki pealkiri ei ole grupp/alapealkiri
   if (s.toLowerCase().indexOf("nädalas") !== -1) return true;
   if (s === s.toUpperCase() && s !== s.toLowerCase()) return true;
   return false;
 }
 function isSubtitle_(name) { return name && String(name).toLowerCase().indexOf("nädalas") !== -1; }
 function isGroupHeader_(name) { return isTitle_(name) && !isSubtitle_(name); }
+/* v14: "Ühekordsed" ploki pealkiri grupi sees (suur- või väiketähtedega, koolon lubatud) */
+function isOneOffHeader_(name) {
+  if (name === null || name === undefined) return false;
+  return String(name).trim().toLowerCase().replace(/\s*:\s*$/, "") === "ühekordsed";
+}
+/* v14: mask (indeks = rida-1) – true "Ühekordsed" pealkirjal ja selle all olevatel ridadel
+ * kuni järgmise grupi pealkirja või "nädalas" reani. Ülemine "Ühekordsed:" silt (enne
+ * esimest gruppi) ei loe. Need read jäetakse KÕIGIS skaneerimistes vahele. */
+function oneOffMask_(b) {
+  var mask = [], seenGroup = false, on = false;
+  for (var i = 0; i < b.length; i++) {
+    var v = b[i][0];
+    if (isGroupHeader_(v)) { seenGroup = true; on = false; }
+    else if (isSubtitle_(v)) { on = false; }
+    else if (seenGroup && isOneOffHeader_(v)) { on = true; }
+    mask.push(on);
+  }
+  return mask;
+}
+function inOneOff_(sh, row) {
+  if (row < 1) return false;
+  var b = sh.getRange(1, CONFIG.colB, row, 1).getValues();
+  return oneOffMask_(b)[row - 1] === true;
+}
 function clientTag_(grp, sub) { return sub ? (grp + " (" + String(sub).trim() + ")") : grp; }
 function groupPartOf_(tag) { return String(tag).toLowerCase().split("(")[0].trim(); }
 function freqOf_(sub) { var m = String(sub).toLowerCase().match(/(\d+)\s*x/); return m ? parseInt(m[1], 10) : 0; }
@@ -699,6 +745,7 @@ function main_(quiet, doLog) {
   abortCheck_(); restoreNumberFormula_(sh);
   abortCheck_(); ensureDropInVisual_(sh);
   abortCheck_(); try { ensureReminderCheckboxes_(sh); } catch (eCb) {}
+  try { updateClientCount_(sh); } catch (eCnt) {}   // v14: F2 klientide arv
   if (doLog) { abortCheck_(); var seaded = settingsSheet_(); if (seaded) { try { refreshSummary_(seaded); } catch (e) {} try { syncBalance_(seaded, today); } catch (e2) { toast("Bilanssi saatmine ebaõnnestus: " + e2.message); } try { syncKadri_(today); } catch (e3) { toast("Kadri bilanssi viga: " + e3.message); } } }
 
   if (archived.length) {
@@ -713,6 +760,37 @@ function main_(quiet, doLog) {
   } else if (!quiet) {
     toast("Valmis. Arhiveeritavaid kliente ei olnud.");
   }
+}
+
+/* v14: F2 = kõigi klientide arv kõigist gruppidest (2x, 1x ja Ühekordsed plokid).
+ * Loeb sama ala mis muu loogika (esimesest grupist kuni scanLimit rida pärast viimast
+ * pealkirja) + viimase grupi "Ühekordsed" ploki järjestikused read. Pealkirju, "Nimi"
+ * ridu ja ülemist "Tasuda tuleb" nimekirja ei loe. Kui F2-s on muu tekst, ei kirjuta üle. */
+function countClients_(sh) {
+  var n = sh.getLastRow();
+  var b = sh.getRange(1, CONFIG.colB, n, 1).getValues();
+  var lastTitle = 0;
+  for (var r = 1; r <= n; r++) if (isTitle_(b[r - 1][0])) lastTitle = r;
+  var scanBottom = Math.min(lastTitle + CONFIG.scanLimit, n);
+  var kr = findFirstGroupRow_(sh);
+  var oo = oneOffMask_(b);
+  var isClient = function (v) {
+    return !!v && String(v).trim() !== "" && !isTitle_(v) && !isOneOffHeader_(v) &&
+           String(v).trim().toLowerCase() !== "nimi";
+  };
+  var count = 0;
+  for (r = kr; r <= scanBottom; r++) if (isClient(b[r - 1][0])) count++;
+  // viimase grupi "Ühekordsed" plokk võib ulatuda skaneeritavast alast välja
+  for (r = scanBottom + 1; r <= n && oo[r - 1] && isClient(b[r - 1][0]); r++) count++;
+  return count;
+}
+function updateClientCount_(sh) {
+  var cell = sh.getRange(CONFIG.countCell);
+  var cur = cell.getValue();
+  if (cur !== "" && cur !== null && typeof cur !== "number") return;   // võõras sisu -> ei puutu
+  var cnt = countClients_(sh);
+  if (cur !== cnt) cell.setValue(cnt);
+  if (!cell.getNote()) cell.setNote("Kliente kokku kõigis gruppides (2x, 1x, Ühekordsed). Uueneb ise.");
 }
 
 function ensureDropInVisual_(sh) {
@@ -732,11 +810,12 @@ function scanActiveClients_(sh, today) {
   for (var r = 1; r <= n; r++) if (isTitle_(b[r - 1][0])) lastTitle = r;
   var scanBottom = lastTitle + CONFIG.scanLimit;
   var kr = findFirstGroupRow_(sh);
-  var out = {}, grp = "", sub = "";
+  var out = {}, grp = "", sub = "", oo = oneOffMask_(b);
   for (r = kr; r <= Math.min(scanBottom, n); r++) {
     var name = b[r - 1][0];
     if (isGroupHeader_(name)) { grp = String(name).toLowerCase().trim(); sub = ""; }
     else if (isSubtitle_(name)) { sub = String(name).trim(); }
+    if (oo[r - 1]) continue;   // v14: "Ühekordsed" plokk
     if (!name || isTitle_(name)) continue;
     var freq = freqOf_(sub);
     var due = parseDueDate_(c[r - 1][0], today);
@@ -773,9 +852,10 @@ function groupSwitch() {
   var isNimi = function (v) { return String(v).trim().toLowerCase() === "nimi"; };
 
   // 1) kõik rühmad (grupp + alajaotus) ja klient(ed)
-  var sections = [], matches = [], grp = "", sub = "", cur = null;
+  var sections = [], matches = [], grp = "", sub = "", cur = null, oo = oneOffMask_(b);
   for (r = kr; r <= scanBottom; r++) {
     var nm = b[r - 1][0];
+    if (oo[r - 1]) continue;   // v14: "Ühekordsed" plokk – ei ole rühm ega klient
     if (isGroupHeader_(nm) && !isNimi(nm)) {
       grp = String(nm).toLowerCase().trim(); sub = "";
       cur = { group: grp, sub: "", freq: 0, head: r, last: r };
@@ -825,7 +905,7 @@ function groupSwitch() {
 
   // sama nimi juba siht-rühmas -> ei liiguta (muidu läheks bilanss segi)
   for (r = tSec.head + 1; r <= tSec.last; r++) {
-    if (String(b[r - 1][0]).trim().toLowerCase() === wanted) {
+    if (!oo[r - 1] && String(b[r - 1][0]).trim().toLowerCase() === wanted) {
       ui.alert("'" + chosen.name + "' on juba rühmas " + label(tSec) + " (rida " + r + "). Muuda enne nime.");
       return;
     }
@@ -907,10 +987,11 @@ function freeExtendClient() {
   for (var r = 1; r <= n; r++) if (isTitle_(b[r - 1][0])) lastTitle = r;
   var scanBottom = Math.min(lastTitle + CONFIG.scanLimit, n);
 
-  var matches = [], grp = "";
+  var matches = [], grp = "", oo = oneOffMask_(b);
   for (r = kr; r <= scanBottom; r++) {
     var nm = b[r - 1][0];
     if (isGroupHeader_(nm)) { grp = String(nm).trim(); }
+    if (oo[r - 1]) continue;   // v14
     if (!nm || isTitle_(nm)) continue;
     if (String(nm).trim().toLowerCase() !== wanted.toLowerCase()) continue;
     matches.push({ row: r, name: String(nm).trim(), group: grp, cur: c[r - 1][0] });
@@ -1002,9 +1083,10 @@ function summerBreakShift() {
     var scanBottom = Math.min(lastTitle + CONFIG.scanLimit, n);
     var kr = findFirstGroupRow_(sh);
 
-    var shifted = 0, skipped1x = 0;
+    var shifted = 0, skipped1x = 0, oo = oneOffMask_(b);
     for (r = kr; r <= scanBottom; r++) {
       var name = b[r - 1][0];
+      if (oo[r - 1]) continue;                        // v14: "Ühekordsed" plokk
       if (!name || isTitle_(name)) continue;         // tiitlid/alapealkirjad vahele
       var val = c[r - 1][0];
       if (is1xMarker_(val)) { skipped1x++; continue; } // "1x" -> jäta puutumata
@@ -1081,6 +1163,7 @@ function logPaymentsFromDateDiff_(sh, today) {
  * Tõstab skripti mälus kuupäeva vana nime alt uue nime alla, et võlts-makset ei tekiks. */
 function carryNameInSnapshot_(sh, row, oldName, newName) {
   var b = sh.getRange(1, CONFIG.colB, row, 1).getValues();
+  if (oneOffMask_(b)[row - 1]) return;   // v14
   var grp = "", sub = "";
   for (var r = row - 1; r >= 1; r--) {
     var t = b[r - 1][0];
@@ -1245,12 +1328,13 @@ function doArchive_(sh, today) {
   var kr = findFirstGroupRow_(sh);
   var lastPay = buildLastDropInMap_(settingsSheet_());   // 1x klientide viimased maksed
 
-  var picks = [], grp = "", sub = "";
+  var picks = [], grp = "", sub = "", oo = oneOffMask_(b);
   for (r = kr; r <= Math.min(scanBottom, n); r++) {
     abortCheck_();
     var name = b[r - 1][0];
     if (isGroupHeader_(name)) { grp = String(name).toLowerCase().trim(); sub = ""; }
     else if (isSubtitle_(name)) { sub = String(name).trim(); }
+    if (oo[r - 1]) continue;   // v14: "Ühekordsed" plokki ei arhiveerita
     if (!name || isTitle_(name)) continue;
     var cval = c[r - 1][0];
 
@@ -1313,11 +1397,12 @@ function buildTopList_(sh, today) {
   var scanBottom = lastTitle + CONFIG.scanLimit;
   var kr = findFirstGroupRow_(sh);
 
-  var list = [], oneXNames = [], grp = "", sub = "";
+  var list = [], oneXNames = [], grp = "", sub = "", oo = oneOffMask_(b);
   for (r = kr; r <= Math.min(scanBottom, n); r++) {
     var name = b[r - 1][0];
     if (isGroupHeader_(name)) { grp = String(name).toLowerCase().trim(); sub = ""; }
     else if (isSubtitle_(name)) { sub = String(name).trim(); }
+    if (oo[r - 1]) continue;   // v14: "Ühekordsed" plokk ei lähe nimekirja ega "1x pääsmed" ritta
     if (!name || isTitle_(name)) continue;
     // KOGU 1x kliendid (kõik grupid) – "1x pääsmed:" rea jaoks
     if (is1xMarker_(c[r - 1][0])) { oneXNames.push(String(name).trim()); continue; }
@@ -1365,9 +1450,10 @@ function colorOverdue_(sh, today) {
   var kr = findFirstGroupRow_(sh);
   if (scanBottom < kr) return;
   var rng = sh.getRange(kr, CONFIG.colC, scanBottom - kr + 1, 1);
-  var bg = rng.getBackgrounds();
+  var bg = rng.getBackgrounds(), oo = oneOffMask_(b);
   for (r = kr; r <= scanBottom; r++) {
     var name = b[r - 1][0];
+    if (oo[r - 1]) continue;   // v14: "Ühekordsed" ploki värve ei muudeta
     if (name && !isTitle_(name)) {
       var due = parseDueDate_(c[r - 1][0], today);
       bg[r - kr][0] = (due && daysOverdue_(due, today) >= 1) ? CONFIG.red : CONFIG.white;
@@ -1468,11 +1554,12 @@ function sendRemindersCore_(verbose) {
   var kr = findFirstGroupRow_(sh);
 
   var sent = readReminderSent_();
-  var grp = "", sentCount = 0, skippedNoTab = 0;
+  var grp = "", sentCount = 0, skippedNoTab = 0, oo = oneOffMask_(b);
 
   for (r = kr; r <= scanBottom; r++) {
     var name = b[r - 1][0];
     if (isGroupHeader_(name)) { grp = String(name).toLowerCase().trim(); continue; }
+    if (oo[r - 1]) continue;   // v14: "Ühekordsed" plokile meile ei saadeta
     if (!name || isTitle_(name)) continue;
 
     var email = String(e[r - 1][0]).trim();
@@ -1623,12 +1710,12 @@ function ensureReminderCheckboxes_(sh) {
   var lastTitle = 0;
   for (var r = 1; r <= n; r++) if (isTitle_(b[r - 1][0])) lastTitle = r;
   var scanBottom = Math.min(lastTitle + CONFIG.scanLimit, n);
-  var grp = "";
+  var grp = "", oo = oneOffMask_(b);
   for (r = findFirstGroupRow_(sh); r <= scanBottom; r++) {
     var name = b[r - 1][0];
     if (isGroupHeader_(name)) { grp = String(name).toLowerCase().trim(); continue; }
     if (grp !== CONFIG.reminder.lapsedGroup) continue;
-    var isKid = !!name && !isTitle_(name) && String(name).trim().toLowerCase() !== "nimi";
+    var isKid = !oo[r - 1] && !!name && !isTitle_(name) && String(name).trim().toLowerCase() !== "nimi";
     var hval = hv[r - 1][0];
     if (isKid && (hval === "" || hval === null)) sh.getRange(r, CONFIG.colH).insertCheckboxes();
     else if (!isKid && typeof hval === "boolean") sh.getRange(r, CONFIG.colH).removeCheckboxes();  // laps kustutatud -> linnuke ära
