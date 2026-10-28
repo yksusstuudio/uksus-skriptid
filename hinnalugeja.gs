@@ -9,6 +9,9 @@
  *  tuleb" ega "1x pääsmed" ritta, ei arhiveeri, ei värvi, ei saada meile, ei pane
  *  linnukest, Rühmavahetus / Pikenda tasuta / Suvepaus ei näe neid.
  *  Plokk kestab kuni järgmise grupi pealkirjani (või "nädalas" reani).
+ *  Skript loob plokid ise üks kord (tabeli avamisel või ▶ Run ajal): iga grupi viimase
+ *  nime alla tuleb pealkiri "Ühekordsed | kehtib | kommentaar" ("1x nädalas" rea
+ *  kujundusega) ja 3 tühja rida. Kui plokk on grupis juba olemas, seda ei tehta.
  *  v14: lahtris F2 = kõigi klientide arv kõigist gruppidest kokku (2x, 1x ja
  *  Ühekordsed). Uueneb kohe, kui lisad/kustutad nime veerus B, ja igal ▶ Run / öösel.
  *  UUS v13: lapsevanemate KORDUSMEELDETULETUS. Veerg H (linnuke) laste ridadel:
@@ -140,6 +143,15 @@ function onOpen() {
     .addItem("⏰ Seadista meeldetuletused (9:00)", "setupReminderTrigger")
     .addToUi();
   var p = PropertiesService.getDocumentProperties();
+  // v14: üks kord – loo "Ühekordsed" plokid ja uuenda nummerduse valem
+  if (p.getProperty("ONEOFF_BLOCKS_DONE") !== "yes") {
+    try {
+      var shO = getSheet_();
+      ensureOneOffBlocks_(shO);
+      restoreNumberFormula_(shO);
+      updateClientCount_(shO);
+    } catch (eO) {}
+  }
   if (p.getProperty("ARCHIVE_PENDING") === "yes") {
     SpreadsheetApp.getActiveSpreadsheet()
       .toast(p.getProperty("ARCHIVE_NAMES") || "", "Need kliendid on arhiveeritud:", 20);
@@ -736,6 +748,7 @@ function main_(quiet, doLog) {
   var sh = getSheet_();
   var today = midnight_(new Date());
 
+  try { ensureOneOffBlocks_(sh); } catch (eOO) {}   // v14: üks kord
   abortCheck_(); removeTopList_(sh);
   if (doLog) { abortCheck_(); try { logPaymentsFromDateDiff_(sh, today); } catch (e) { toast("Tasude logimise viga: " + e.message); } }
   abortCheck_(); var archived = doArchive_(sh, today);
@@ -783,6 +796,56 @@ function countClients_(sh) {
   // viimase grupi "Ühekordsed" plokk võib ulatuda skaneeritavast alast välja
   for (r = scanBottom + 1; r <= n && oo[r - 1] && isClient(b[r - 1][0]); r++) count++;
   return count;
+}
+/* v14: loob igasse trennigruppi (kalisteenika, swed, alfa kolmik, lapsed) "Ühekordsed"
+ * ploki, kui seda veel pole. Tehakse AINULT ÜKS kord (mälu: ONEOFF_BLOCKS_DONE), et
+ * kustutatud plokk tagasi ei tuleks. Pealkirja rida saab "1x nädalas" rea kujunduse. */
+function ensureOneOffBlocks_(sh) {
+  var props = PropertiesService.getDocumentProperties();
+  if (props.getProperty("ONEOFF_BLOCKS_DONE") === "yes") return;
+  var n = sh.getLastRow();
+  var b = sh.getRange(1, CONFIG.colB, n, 1).getValues();
+  var lastTitle = 0;
+  for (var r = 1; r <= n; r++) if (isTitle_(b[r - 1][0])) lastTitle = r;
+  var scanBottom = Math.min(lastTitle + CONFIG.scanLimit, n);
+  var kr = findFirstGroupRow_(sh);
+  var groups = [], g = null;
+  for (r = kr; r <= scanBottom; r++) {
+    var v = b[r - 1][0];
+    if (isGroupHeader_(v)) {
+      g = { name: String(v).toLowerCase().trim(), head: r, sub: 0, last: r, has: false };
+      groups.push(g);
+      continue;
+    }
+    if (!g) continue;
+    if (isOneOffHeader_(v)) { g.has = true; continue; }
+    if (isSubtitle_(v)) g.sub = r;                        // viimane alapealkiri (nt "1x nädalas")
+    if (v !== "" && v !== null) g.last = r;              // grupi viimane täidetud rida
+  }
+  var w = CONFIG.colG - CONFIG.colB + 1;                // B..G (H linnukesi ei kopeeri)
+  // alt üles, et ülemiste gruppide reanumbrid ei nihkuks
+  for (var i = groups.length - 1; i >= 0; i--) {
+    g = groups[i];
+    if (g.has || !classFromTokens_(g.name.split(/\s+/))) continue;   // ainult päris trennirühmad
+    var after = g.last;
+    if (after + 1 <= sh.getMaxRows()) {
+      var nb = sh.getRange(after + 1, CONFIG.colB).getValue();
+      if (nb === "" || nb === null) after++;               // jäta olemasolev tühi vaherida alles
+    }
+    sh.insertRowsAfter(after, 4);
+    var hr = after + 1;
+    sh.getRange(hr, CONFIG.colB, 4, w).clearContent().clearFormat();
+    if (g.sub) sh.getRange(g.sub, CONFIG.colB, 1, w).copyTo(sh.getRange(hr, CONFIG.colB, 1, w), { formatOnly: true });
+    sh.getRange(hr, CONFIG.colB, 1, 3).setValues([["Ühekordsed", "kehtib", "kommentaar"]]);
+    if (g.sub) {   // tühjad read nagu "1x nädalas" nimede read
+      var src = Math.min(g.sub + 1, g.last);
+      for (var k = 1; k <= 3; k++)
+        sh.getRange(src, CONFIG.colB, 1, w).copyTo(sh.getRange(hr + k, CONFIG.colB, 1, w), { formatOnly: true });
+      sh.getRange(hr + 1, CONFIG.colC, 3, 1).setBackground(null);   // ära päri punast
+    }
+  }
+  props.setProperty("ONEOFF_BLOCKS_DONE", "yes");
+  SpreadsheetApp.flush();
 }
 function updateClientCount_(sh) {
   var cell = sh.getRange(CONFIG.countCell);
