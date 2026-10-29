@@ -12,6 +12,7 @@
  *  Skript loob plokid ise üks kord (tabeli avamisel või ▶ Run ajal): iga grupi viimase
  *  nime alla tuleb pealkiri "Ühekordsed | kehtib | kommentaar" ("1x nädalas" rea
  *  kujundusega) ja 3 tühja rida. Kui plokk on grupis juba olemas, seda ei tehta.
+ *  v14: lapsed-rühma lapsi ei arhiveerita enam 3 nädala pärast ise (CONFIG.archiveLapsed).
  *  v14: lahtris F2 = kõigi klientide arv kõigist gruppidest kokku (2x, 1x ja
  *  Ühekordsed). Uueneb kohe, kui lisad/kustutad nime veerus B, ja igal ▶ Run / öösel.
  *  UUS v13: lapsevanemate KORDUSMEELDETULETUS. Veerg H (linnuke) laste ridadel:
@@ -59,6 +60,7 @@ var CONFIG = {
   labels: { dropIn: "ühekordsed", dueList: "tasuda tuleb" },
   scanLimit: 15,
   archiveDays: 21,
+  archiveLapsed: false,        // v14: lapsed-rühma lapsi EI arhiveerita automaatselt (Erik eemaldab ise). true = vana viis
   red: "#ff0000",
   white: "#ffffff",
   inputBg: "#fff2cc",
@@ -1398,6 +1400,7 @@ function doArchive_(sh, today) {
     if (isGroupHeader_(name)) { grp = String(name).toLowerCase().trim(); sub = ""; }
     else if (isSubtitle_(name)) { sub = String(name).trim(); }
     if (oo[r - 1]) continue;   // v14: "Ühekordsed" plokki ei arhiveerita
+    if (!CONFIG.archiveLapsed && grp === CONFIG.reminder.lapsedGroup) continue;   // v14: lapsi ei arhiveerita
     if (!name || isTitle_(name)) continue;
     var cval = c[r - 1][0];
 
