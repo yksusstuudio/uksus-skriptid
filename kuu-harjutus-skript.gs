@@ -1806,18 +1806,8 @@ function uus_(pub) {
   return Number(props_().getProperty('PUB_VER:' + pub.getId())) >= PUB_VER;
 }
 
-// v5 → v6: keelevalik igale vahekaardile, „Eemalda“, uued tekstid, uus reeglite vahekaart. Kirjed jäävad alles.
-function uuenda_(pub) {
-  var ver = Number(props_().getProperty('PUB_VER:' + pub.getId())) || 5;
-  var g = pub.getSheetByName(T_GUIDE), lang = g && str_(g.getRange('C3').getValue()) === 'English' ? 'English' : 'Eesti';
-  KUUD_ = null;
-  var vead = [];
-  var proovi = function (nimi, fn) {                             // üks ebaõnnestunud samm ei peata ülejäänut
-    try { fn(); } catch (err) { vead.push(nimi + ': ' + (err && err.message ? err.message : err)); }
-  };
-
-  proovi('read', function () { laienda_(pub); viitedLaiendus_(pub); });
-  proovi('tekstid', function () {
+// Muutunud tekstid (leitakse vana valemi või teksti järgi). Kiire: käib ka kohe uue koodi järel, enne pikka Seadistat (Erik 30.10).
+function tekstid_(pub) {
   var lehed = {}, kuud = kuulehed_(pub).map(function (m) { return m.sh; });   // muutunud tekstid (leitakse vana valemi järgi)
   KH_PATCH.cells.forEach(function (c) { (lehed[c[0]] = lehed[c[0]] || []).push(c); });
   Object.keys(lehed).forEach(function (nimi) {
@@ -1838,7 +1828,20 @@ function uuenda_(pub) {
       });
     });
   });
-  });
+}
+
+// v5 → v6: keelevalik igale vahekaardile, „Eemalda“, uued tekstid, uus reeglite vahekaart. Kirjed jäävad alles.
+function uuenda_(pub) {
+  var ver = Number(props_().getProperty('PUB_VER:' + pub.getId())) || 5;
+  var g = pub.getSheetByName(T_GUIDE), lang = g && str_(g.getRange('C3').getValue()) === 'English' ? 'English' : 'Eesti';
+  KUUD_ = null;
+  var vead = [];
+  var proovi = function (nimi, fn) {                             // üks ebaõnnestunud samm ei peata ülejäänut
+    try { fn(); } catch (err) { vead.push(nimi + ': ' + (err && err.message ? err.message : err)); }
+  };
+
+  proovi('read', function () { laienda_(pub); viitedLaiendus_(pub); });
+  proovi('tekstid', function () { tekstid_(pub); });
   if (ver < 6) uuenda6_(pub, g, lang);
 
   var ajutine = null;
@@ -2870,7 +2873,7 @@ function html_(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;'
 var AUTO_MAX = 6, AUTO_PAASTIK = 'kuuHarjutusAutoSeadista';
 
 // Kiire kontroll iga päästiku alguses. Ei viska kunagi viga.
-function versioon() {
+function versioon(kiire) {
   try {
     var p = PropertiesService.getScriptProperties();
     if (!p.getProperty('PRIV_ID') || p.getProperty('SEADISTATUD') === EHITUS || p.getProperty('AUTO_OOTEL') === EHITUS) return;
@@ -2882,7 +2885,27 @@ function versioon() {
       p.setProperty('AUTO_KORD', '0');
       autoJargmine_(60 * 1000);
     } finally { lock.releaseLock(); }
+    if (kiire) kiire_();                                     // ainult minutipäästikust, mitte osaleja muudatusest
   } catch (err) { Logger.log('Versiooni kontroll: ' + (err && err.message ? err.message : err)); }
+}
+
+// Kohe uue koodi järel (Erik 30.10: 15 minutit on liiga kaua): ainult tekstid ja 2x/eripäevad kõigis gruppides.
+// Täis-Seadista (mall, valemid, kaitsed) tuleb minut hiljem nagu enne.
+function kiire_() {
+  var priv = SpreadsheetApp.openById(PropertiesService.getScriptProperties().getProperty('PRIV_ID'));
+  grupid_(priv).forEach(function (g) {
+    if (!g) return;
+    try {
+      grupiga_(g, function () {
+        KUUD_ = null;
+        var pub = avalik_();
+        if (!pub) return;
+        tekstid_(pub);
+        topeltElus_(g);
+      });
+    } catch (err) { Logger.log('Kiire uuendus: ' + (err && err.message ? err.message : err)); }
+  });
+  KUUD_ = null;
 }
 
 function autoJargmine_(ms) {
@@ -2938,7 +2961,7 @@ function kuuHarjutusPlaan(e) { KuuHarjutus.versioon(); KuuHarjutus.plaaniMuudatu
 function kuuHarjutusLoos() { KuuHarjutus.aktiivsele(KuuHarjutus.loosiMenuust); }
 function kuuHarjutusYlevaade() { KuuHarjutus.ylevaade(); }
 function kuuHarjutusNimekiri() { KuuHarjutus.nimekiri(); }
-function kuuHarjutusVersioon() { KuuHarjutus.versioon(); }
+function kuuHarjutusVersioon() { KuuHarjutus.versioon(true); }
 function kuuHarjutusAutoSeadista() { KuuHarjutus.autoSeadista(); }
 
 // ================================================================ uuenduse andmed ja ühise tabeli fail (xlsx, base64)
@@ -3609,7 +3632,7 @@ null
 "DCE1E8": "E6DED3"
 }
 };
-var EHITUS = '394beff61128';
+var EHITUS = '5cd5d9061a85';
 var KH_XLSX = [
   "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",
