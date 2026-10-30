@@ -1500,14 +1500,33 @@ var TOPELT_MARKUS = 'Täna tuleb teha kahekordselt - saad ka 2x pileteid. Tavali
 // Ühekordsed eripäevad (Erik 30.10): sama raam kui 2x päeval, reas 4 silt ja märkus. Kehtib kõigis gruppides.
 // Eripäeval loeb iga tulemus (> 0) päeva tehtuks ja roheliseks (valemid: rea 4 silt, mis pole „2x“; mk_v5.py ERI).
 var ERIPAEVAD = {
-  '2026-10-31': { silt: 'NATO',
-    markus: 'NATO test: Tee nii palju kätekõverdusi kui suudad 2 min jooksul. Vt. reeglid siit: https://shorturl.at/2ytSl\nKirjuta lahtrisse oma tulemus. Täna loeb iga tulemus päeva tehtuks, ka siis, kui see jääb alla sinu päeva eesmärgi.\n\n' +
-      'NATO test: Do as many push-ups as you can in 2 minutes. Rules here: https://shorturl.at/2ytSl\nWrite your result in the cell. Today any result counts the day as done, even if it is below your daily target.' }
+  '2026-10-31': { silt: 'NATO', link: 'https://shorturl.at/2ytSl',
+    markus: 'NATO test: Tee nii palju kätekõverdusi kui suudad 2 min jooksul. Reeglid: https://shorturl.at/2ytSl (klikitav link on vasakul üleval lahtris A4)\nKirjuta lahtrisse oma tulemus. Täna loeb iga tulemus päeva tehtuks, ka siis, kui see jääb alla sinu päeva eesmärgi.\n\n' +
+      'NATO test: Do as many push-ups as you can in 2 minutes. Rules: https://shorturl.at/2ytSl (clickable link at the top left, cell A4)\nWrite your result in the cell. Today any result counts the day as done, even if it is below your daily target.' }
 };
 function eripaev_(m, p) {
   if (p > m.days) return null;
   var d = ymd_(m.start);
   return ERIPAEVAD[d[0] + '-' + (d[1] < 10 ? '0' : '') + d[1] + '-' + (p < 10 ? '0' : '') + p] || null;
+}
+// Märkuses link ei ole klikitav ega kopeeritav (Erik 30.10), sildil peidaks link märkuse. Nii on eripäeva link lahtris A4
+// (alati nähtaval, ka siis, kui veerud on paremale keritud). Tavakuus on A4 jälle malli valem „⚡ 2x = topeltpäev“.
+var A4_VALEM = '=IF(\'' + T_GUIDE + '\'!$C$3="English","⚡ 2x = double day","⚡ 2x = topeltpäev")';
+function eriLink_(m) {
+  var eri = null, paev = 0;
+  for (var p = 1; p <= 31 && !eri; p++) { var e = eripaev_(m, p); if (e && e.link) { eri = e; paev = p; } }
+  var a4 = m.sh.getRange(4, 1);
+  if (eri) {
+    var tekst = '⚡ ' + eri.silt + ' ' + paev + '.' + ymd_(m.start)[1] + ':\n' + eri.link;
+    if (!a4.getFormula() && str_(a4.getValue()) === tekst) return false;
+    a4.setRichTextValue(SpreadsheetApp.newRichTextValue().setText(tekst).setLinkUrl(eri.link).build()).setWrap(true);
+    m.sh.setRowHeight(4, 30);
+    return true;
+  }
+  if (a4.getFormula() || str_(a4.getValue()).indexOf('http') < 0) return false;
+  a4.setFormula(A4_VALEM).setWrap(false);
+  m.sh.setRowHeight(4, 16);
+  return true;
 }
 function topeltKuusse_(m, paevad) {
   var r = m.sh.getRange(4, FD, 1, 31), v = r.getValues()[0], muutus = false;
@@ -1534,6 +1553,7 @@ function topeltKuusse_(m, paevad) {
       muutus = true;
     }
   }
+  if (eriLink_(m)) muutus = true;
   var mal = m.sh.getRange(22, AW);
   if (str_(mal.getValue())) mal.setValue('');                // v9b mäletas siin plaani päevi, enam pole vaja
   return muutus;
@@ -3565,7 +3585,7 @@ null
 "DCE1E8": "E6DED3"
 }
 };
-var EHITUS = 'e373f7a50f9b';
+var EHITUS = 'ba4e5ce9c3a9';
 var KH_XLSX = [
   "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",
