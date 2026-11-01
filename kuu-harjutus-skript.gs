@@ -865,7 +865,14 @@ function eiTaitnud_(pub, t) {
   var uus = kuud.filter(function (m) { return m.start === vana.end + 1; })[0];
   if (!uus) return [];
   var v = ro.getRange(RR0, 2, N, 5).getValues();
-  var vp = vana.sh.getRange(R0, FD, N, vana.days).getValues(), up = uus.sh.getRange(R0, FD, N, uus.days).getValues();
+  var vp0 = vana.sh.getRange(R0, FD, N, vana.days).getValues(), up = uus.sh.getRange(R0, FD, N, uus.days).getValues();
+  // Lõppenud kuu read ei liigu koos nimekirjaga (pausid liiguvad igal ööl lõppu), seepärast otsin vana kuu rea nime järgi.
+  var vnimed = vana.sh.getRange(R0, 1, N, 1).getValues().map(function (r) { return str_(r[0]).toLowerCase(); });
+  var vp = v.map(function (r, k) {
+    var i = vnimed.indexOf(str_(r[0]).toLowerCase());
+    if (i < 0 && str_(r[3])) i = vnimed.indexOf(str_(r[3]).toLowerCase());
+    return i >= 0 ? vp0[i] : [];
+  });
   var kirje = function (x) { return typeof x === 'number' || /^[JH]$/i.test(str_(x)); };
   var nimed = [], elavad = kuud.filter(function (m) { return !m.frozen && m.start > vana.end; });
   v.forEach(function (r, k) {
@@ -877,6 +884,7 @@ function eiTaitnud_(pub, t) {
     ro.getRange(RR0 + k, 3).setValue(PAUSE).setNote('Kuu viimase 7 päeva jooksul polnud kirjeid, seepärast alustad uut kuud pausil. Tahad jätkata? Vali siin „Osalen“. / ' +
       'There were no entries in the last 7 days of the month, so you start the new month paused. Want to continue? Pick “Osalen · In” here.');
     ro.getRange(RR0 + k, 6).setValue(PAUSE);
+    pausiAeg_(pub, nimi, false);                            // automaatne paus liigub lõppu kohe samal ööl (Erik 1.11)
     elavad.forEach(function (m) { tyhjenda_(m, k, false); });
     nimed.push(nimi);
   });
@@ -987,7 +995,7 @@ function sobita_(pub, t, naita, logist) {
       var lp = lt === null ? t : lt;
       r[1] = st; r[2] = lp; r[3] = r[0]; r[4] = st;
       kaivad().forEach(function (m) { liida_(m, k, lp); });
-      if (st === PAUSE) kaivad().forEach(function (m) { paus_(m, k, lp); });
+      if (st === PAUSE) { pausiAeg_(pub, r[0], true); kaivad().forEach(function (m) { paus_(m, k, lp); }); }
       continue;
     }
     if (r[2] === null && r[1] !== REMOVE) {                               // Erik 3.10: nimi on, liitumiskuupäev puudub
@@ -1008,6 +1016,7 @@ function sobita_(pub, t, naita, logist) {
     var olek = r[1] === PAUSE ? PAUSE : IN;
     r[1] = olek;
     if (olek !== r[4]) {
+      pausiAeg_(pub, r[0], olek === PAUSE);
       if (olek === PAUSE) {
         kaivad().forEach(function (m) { paus_(m, k, t); });
       } else {
@@ -1111,27 +1120,44 @@ function erinevus_(a, b) {
 
 // Kuu alguses lähevad pausil olijad nimekirja lõppu, et kuu vahekaardi ülemised read oleksid osalejate omad.
 // Tehakse üks kord kuus, kuu esimestel päevadel (öine hooldus). Kirjed liiguvad inimesega kaasa.
+// Erik 1.11: igal ööl liiguvad pausil olijad (vähemalt 24 h pausil) nimekirja ja kuu vahekaartide lõppu, nii et vahele ei jää tühje ridu.
+// Tagasi tulnu („Osalen“) liigub järgmisel ööl osalejate lõppu.
 function jarjesta_(pub, t) {
-  var kuu = kuulehed_(pub, true).filter(function (m) { return !m.frozen && m.start <= t && t <= m.end; })[0];
-  if (!kuu) return;
-  var props = props_(), key = 'järjestus:' + pub.getId() + ':' + kuu.start;
-  if (props.getProperty(key)) return;
-  if (t <= kuu.start + 2) pausidLoppu_(pub, t);
-  props.setProperty(key, String(t));
+  pausidLoppu_(pub, t);
+}
+
+var PAUS_TUNDE = 24;
+function pausiAeg_(pub, nimi, paus) {
+  var key = 'pausaeg:' + pub.getId() + ':' + str_(nimi).toLowerCase();
+  if (!str_(nimi)) return;
+  if (paus) props_().setProperty(key, String(new Date().getTime())); else props_().deleteProperty(key);
+}
+function pausValmis_(pub, nimi) {
+  var a = Number(props_().getProperty('pausaeg:' + pub.getId() + ':' + str_(nimi).toLowerCase()) || 0);
+  return !a || new Date().getTime() - a >= PAUS_TUNDE * 3600 * 1000 - 5 * 60 * 1000;   // 5 min varu öise käivituse kõikumisele
 }
 
 function pausidLoppu_(pub, t) {
   var ro = pub.getSheetByName(T_ROSTER);
   if (nimekirjaKohti_(ro) < N) return false;
-  var ala = ro.getRange(RR0, 2, N, 5), v = ala.getValues(), osaleb = [], paus = [], tyhi = [];
-  v.forEach(function (r, k) { (!str_(r[0]) && !str_(r[3]) ? tyhi : str_(r[1]) === PAUSE ? paus : osaleb).push(k); });
-  var p = osaleb.concat(paus, tyhi);
+  var ala = ro.getRange(RR0, 2, N, 5), v = ala.getValues(), osaleb = [], paus = [], pausTyhi = [], tyhi = [];
+  var praegu = kuulehed_(pub, true).filter(function (m) { return !m.frozen && m.start <= t && t <= m.end; })[0];
+  var nimiKuus = praegu ? praegu.sh.getRange(R0, 1, N, 1).getValues().map(function (r) { return str_(r[0]) !== ''; }) : [];
+  v.forEach(function (r, k) {
+    if (!str_(r[0]) && !str_(r[3])) tyhi.push(k);
+    else if (str_(r[1]) === PAUSE && pausValmis_(pub, r[3] || r[0])) (nimiKuus[k] ? paus : pausTyhi).push(k);   // kel see kuu veel nimi on, jääb tühjade ette
+    else osaleb.push(k);
+  });
+  var p = osaleb.concat(paus, pausTyhi, tyhi);
   if (p.every(function (k, i) { return k === i; })) return false;
+  var rn = ala.getNotes();                                  // märkused (nt automaatse pausi selgitus) liiguvad inimesega kaasa
   ala.setValues(p.map(function (k) { return v[k].map(function (x) { return x === null ? '' : txt_(x); }); }));
+  ala.setNotes(p.map(function (k) { return rn[k]; }));
   ro.getRange(RR0, 4, N, 1).setNumberFormat('d.mm.yyyy');
   kuulehed_(pub, true).forEach(function (m) {
     if (m.frozen || t > m.end) return;                      // lõppenud kuu nimed on juba paigas (staatiline_)
-    var r = m.sh.getRange(R0, 1, N, 34), mv = r.getValues(), mf = r.getFormulas();
+    var r = m.sh.getRange(R0, 1, N, 34), mv = r.getValues(), mf = r.getFormulas(), mn = r.getNotes();
+    r.setNotes(p.map(function (k) { return mn[k]; }));
     var uus = p.map(function (k, i) {
       var row = [mf[k][0] ? nimeValem_(m.sh, R0 + i) : txt_(mv[k][0])];
       for (var c = 1; c < 34; c++) row.push(mv[k][c] === null ? '' : txt_(mv[k][c]));
@@ -2972,6 +2998,10 @@ function kiire_() {
         lisaVorming_(pub);
         topeltElus_(g);
         vanadKuud_(pub);
+        // Erik 1.11 öösel: praegused augud pausil olijate kohal kaovad kohe, mitte alles järgmisel ööl. Ainult üks kord ja öösel (0–6),
+        // et ridade tõstmine ei satuks kellegi kirjutamise peale.
+        var kord = 'pausid-kohe:' + pub.getId(), tund = Number(Utilities.formatDate(new Date(), TZ, 'HH'));
+        if (!props_().getProperty(kord) && tund < 6) { pausidLoppu_(pub, tana_()); props_().setProperty(kord, '1'); }
       });
     } catch (err) { Logger.log('Kiire uuendus: ' + (err && err.message ? err.message : err)); }
   });
@@ -3714,7 +3744,7 @@ null
 "DCE1E8": "E6DED3"
 }
 };
-var EHITUS = 'c7b6320b3454';
+var EHITUS = '79dd8485fcdc';
 var KH_XLSX = [
   "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",
