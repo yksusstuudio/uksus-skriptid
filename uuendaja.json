@@ -21,6 +21,23 @@
       ]
     },
     {
+      "nimi": "Kuu arveldus",
+      "projekt": "1mfgbQMYFy28pkBK6vJguotZpM61IjcL_DICIfLhKpx1iqpVVUvgtTJXg",
+      "tunnus": "ÜKSUS STUUDIO — Monthly Billing Automation",
+      "allikas": "arveldus.gs",
+      "lopp": "ARVELDUSE LÕPP",
+      "peidetud": [
+        {
+          "kohataide": "__ARVELDUSE_BILANSS_ID__",
+          "muster": "const SPREADSHEET_ID\\s*=\\s*'([A-Za-z0-9_-]{25,})'"
+        },
+        {
+          "kohataide": "__BRONEERINGU_FAILI_ID__",
+          "muster": "const BOOKING_SPREADSHEET_ID\\s*=\\s*'([A-Za-z0-9_-]{25,})'"
+        }
+      ]
+    },
+    {
       "nimi": "Kuu harjutuse uuendaja",
       "projekt": "ISE",
       "tunnus": "Kuu harjutuse uuendaja",
