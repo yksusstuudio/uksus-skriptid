@@ -57,11 +57,12 @@ const GROUP_TRAINERS = [
 ];
 
 // ── ALEX ──────────────────────────────────────────────────────
-// Alex is NOT counted from the booking sheet. The script reads the
-// numbers already in the "Alex" tab for the billed month (arv column:
-// Jaanuar C ... Detsember Y; rows 5-7) with prices from column B,
-// writes the Alex_arve invoice and emails it. Nothing in the Alex tab
-// is changed.
+// Total Body Performance is counted from the booking sheet: every
+// half-hour cell with "Total Body Performance" = 0.5, so two cells
+// (1 hour) = 1 occasion. The count goes into the Alex tab, row 5, arv
+// column of the month (Jaanuar C ... Detsember Y). Muu trenn (row 6) and
+// Treeneri pääse (row 7) are typed by hand. The invoice is then built
+// from the Alex tab and emailed.
 
 const ALEX = {
   name: 'Alex',
@@ -69,6 +70,7 @@ const ALEX = {
   invoiceTab: 'Alex_arve',                   // copy of Kadri_arve, Alex's email in C13
   rows: { tbp: 5, muu: 6, pass: 7 },         // rows in the Alex tab
   priceCol: 'B',                             // prices in Alex!B5:B7
+  tbpText: 'totalbodyperformance',           // booking text to look for (spaces/case ignored)
   invoiceNames: {
     tbp:  'Total Body Performance',
     muu:  'Muu trenn',
@@ -355,8 +357,9 @@ function runMonthlyBilling() {
     reportLines.push(`  TOTAL: €${gTotal.toFixed(2)}\n`);
   }
 
-  // Alex (numbers taken from the Alex tab)
+  // Alex: count Total Body Performance, write to Alex tab, then invoice
   Logger.log(`\nProcessing ${ALEX.name}`);
+  fillAlexTab(ss, countAlexTbp(targetTabs, targetMonth, targetYear), targetMonth);
   const aTotal = writeAlexInvoice(ss, targetMonth, targetYear);
   reportLines.push(`Trainer: ${ALEX.name}`);
   if (aTotal > 0) {
@@ -1060,6 +1063,7 @@ function testFullRun() {
   }
 
   // Alex
+  fillAlexTab(ss, countAlexTbp(targetTabs, targetMonth, targetYear), targetMonth);
   const aTotal = writeAlexInvoice(ss, targetMonth, targetYear);
   reportLines.push(`Trainer: ${ALEX.name}`);
   if (aTotal > 0) {
@@ -1121,7 +1125,9 @@ function dryRun() {
   }
 
   // Alex
-  Logger.log(`\n=== ${ALEX.name} (from Alex tab) ===`);
+  Logger.log(`\n=== ${ALEX.name} ===`);
+  Logger.log(`Total Body Performance from bookings: ${countAlexTbp(targetTabs, targetMonth, targetYear)}`);
+  Logger.log('Currently in the Alex tab:');
   readAlexLines(ss, targetMonth).forEach(l => Logger.log(`${l.desc}: ${l.qty} x €${l.price} = €${l.total}`));
 
   Logger.log('\n✅ Dry run complete — no data was written or emails sent.');
@@ -1259,6 +1265,42 @@ function dumpInvoiceSheet() {
 // ── ALEX ──────────────────────────────────────────────────────
 // ============================================================
 
+// Counts Total Body Performance in the booking sheet for the month.
+// Each half-hour row with the text (in either client column) = 0.5 occasions.
+function countAlexTbp(tabs, targetMonth, targetYear) {
+  const norm = t => (t || '').toString().toLowerCase().replace(/\s+/g, '');
+  let count = 0;
+  for (const tab of tabs) {
+    const allData   = tab.getDataRange().getValues();
+    const headerRow = allData[HEADER_ROW - 1] || [];
+    for (const block of DAY_BLOCKS) {
+      const date = parseDateHeader(headerRow[block.dateCol], targetYear);
+      if (!date || date.getMonth() !== targetMonth) continue;
+      for (let r = DATA_START_ROW - 1; r < allData.length; r++) {
+        const row = allData[r];
+        if (norm(row[block.clientA]).includes(ALEX.tbpText) || norm(row[block.clientB]).includes(ALEX.tbpText)) {
+          count += 0.5;
+          Logger.log(`  TBP ${date.toDateString()} row ${r + 1} (${tab.getName()})`);
+        }
+      }
+    }
+  }
+  Logger.log(`  Alex Total Body Performance: ${count}`);
+  return count;
+}
+
+// Writes the TBP count into the Alex tab (row 5, arv column of the month).
+// Like Kadi/Villem: when nothing is found, the cell is left as it is.
+function fillAlexTab(ss, count, targetMonth) {
+  if (!count) { Logger.log('  No Total Body Performance found — Alex tab left as is'); return; }
+  const sheet = ss.getSheetByName(ALEX.dataTab);
+  if (!sheet) { Logger.log(`Data tab "${ALEX.dataTab}" not found — skipping`); return; }
+  const cell = colToLetter(getAlexMonthCol(targetMonth)) + ALEX.rows.tbp;
+  sheet.getRange(cell).setValue(count);
+  SpreadsheetApp.flush();
+  Logger.log(`  Wrote ${count} to ${ALEX.dataTab}!${cell}`);
+}
+
 // Reads Alex's lines for the month from the Alex tab
 function readAlexLines(ss, targetMonth) {
   const data = ss.getSheetByName(ALEX.dataTab);
@@ -1335,22 +1377,29 @@ function writeAlexInvoice(ss, targetMonth, targetYear) {
 // Change the month to check: 0 = January ... 9 = October
 
 function dryRunAlex() {
-  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const bss = SpreadsheetApp.openById(BOOKING_SPREADSHEET_ID);
   const targetMonth = 9;   // October
-  const lines = readAlexLines(ss, targetMonth);
+  const targetYear  = 2026;
+  const tabs = getTargetTabs(bss, readValidTabPrefixes(ss, targetYear), targetMonth, targetYear);
   Logger.log(`=== Alex ${getMonthName(targetMonth)} ===`);
+  Logger.log(`Total Body Performance from bookings: ${countAlexTbp(tabs, targetMonth, targetYear)}`);
+  Logger.log('Currently in the Alex tab:');
   let total = 0;
-  lines.forEach(l => { Logger.log(`${l.desc}: ${l.qty} x €${l.price} = €${l.total}`); total += l.total; });
+  readAlexLines(ss, targetMonth).forEach(l => { Logger.log(`${l.desc}: ${l.qty} x €${l.price} = €${l.total}`); total += l.total; });
   Logger.log(`TOTAL: €${total.toFixed(2)}`);
   Logger.log('✅ Alex dry run complete — nothing written, no email sent.');
 }
 
-// ── TEST: Alex for real (writes Alex_arve, SENDS email) ───────
+// ── TEST: Alex for real (writes Alex tab + Alex_arve, SENDS email) ──
 
 function testAlex() {
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   const targetMonth = 10;  // November (October was already sent by hand)
   const targetYear  = 2026;
+  const bss  = SpreadsheetApp.openById(BOOKING_SPREADSHEET_ID);
+  const tabs = getTargetTabs(bss, readValidTabPrefixes(ss, targetYear), targetMonth, targetYear);
+  fillAlexTab(ss, countAlexTbp(tabs, targetMonth, targetYear), targetMonth);
   const total = writeAlexInvoice(ss, targetMonth, targetYear);
   if (total > 0) sendInvoiceEmail(ss, ALEX, targetMonth, targetYear, total);
   Logger.log(`✅ Alex test complete. Total: €${total.toFixed(2)}`);
