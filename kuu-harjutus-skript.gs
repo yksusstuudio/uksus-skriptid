@@ -737,6 +737,7 @@ function hooldus1_() {
       samm('uus kuu', function () { uuedKuud_(pub, plan, t); });
       samm('plaan', function () { synk_(pub, plan, t); });
     }
+    samm('vana kuu', function () { vanadKuud_(pub); });
     samm('järjestus', function () { jarjesta_(pub, t); });
     if (!GRUPP_) samm(KLOON + ' teistesse gruppidesse', function () { kloon_(t); });
     samm('lukud', function () { kaitseKoik_(pub, t); });
@@ -1432,7 +1433,8 @@ function looKuu_(pub, y, m, cfg, t, topelt) {
   if (sh.isSheetHidden()) sh.showSheet();
   var g = pub.getSheetByName(T_GUIDE);
   if (g) sh.getRange('C1').setValue(str_(g.getRange('C3').getValue()) === 'English' ? 'English' : 'Eesti');
-  var parast = kuud.length ? kuud[kuud.length - 1].sh.getIndex() : pub.getSheetByName(T_ROSTER).getIndex();
+  var elus = kuud.filter(function (k) { return !k.frozen; });   // uus kuu tuleb viimase käimasoleva kuu järele, lõppenud kuu jääb paremale
+  var parast = elus.length ? elus[elus.length - 1].sh.getIndex() : pub.getSheetByName(T_ROSTER).getIndex();
   pub.setActiveSheet(sh);
   pub.moveActiveSheet(parast + 1);
   KUUD_ = null;
@@ -1453,6 +1455,8 @@ function looKuu_(pub, y, m, cfg, t, topelt) {
   if (t > start) ro.forEach(function (r, k) { if (str_(r[0]) && str_(r[1]) !== PAUSE) xTaide_(kuu, k, t); });
   registreeri_(pub, sh);
   kaitse_(sh, kuuAvatud_(kuu, t));
+  KUUD_ = null;
+  vanadKuud_(pub);
   } catch (err) {                                           // pooleli jäänud vahekaart ei jää osalejatele näha
     try { pub.deleteSheet(sh); } catch (e2) {}
     KUUD_ = null;
@@ -1475,9 +1479,35 @@ function kylmuta_(pub, m) {
     m.name = uus;
     registreeri_(pub, m.sh, vana);
   }
-  kaitse_(m.sh, []);
-  if (!m.sh.isSheetHidden()) m.sh.hideSheet();
+  kaitse_(m.sh, [m.sh.getRange('C1')]);                     // keelevalik jääb vabaks, sest vahekaart on nähtav
   m.frozen = true;
+  KUUD_ = null;
+  vanadKuud_(pub);
+}
+
+// Erik 1.11: lõppenud kuu jääb nähtavale (auhinnad loositakse hiljem) ja on uue kuu vahekaardist paremal.
+// Peitu läheb alles siis, kui tekib ülejärgmise kuu vahekaart (oktoober kaob, kui detsembri oma tekib).
+function vanadKuud_(pub) {
+  KUUD_ = null;
+  var kuud = kuulehed_(pub), elus = kuud.filter(function (m) { return !m.frozen; });
+  var naha = kuud.filter(function (m) {
+    return m.frozen && !kuud.some(function (k) { return k.start > m.end + 1; });
+  });
+  kuud.forEach(function (m) {
+    if (!m.frozen) return;
+    if (naha.indexOf(m) < 0) { if (!m.sh.isSheetHidden()) m.sh.hideSheet(); }
+    else if (m.sh.isSheetHidden()) { m.sh.showSheet(); kaitse_(m.sh, [m.sh.getRange('C1')]); }
+  });
+  var ankur = elus.length ? elus[elus.length - 1].sh : pub.getSheetByName(T_ROSTER);
+  if (!ankur || !naha.length) { KUUD_ = null; return; }
+  naha.forEach(function (m, i) {
+    var a = ankur.getIndex();                               // 1-põhine; vasakult ära tõstes nihkub ankur ühe võrra
+    var koht = m.sh.getIndex() > a ? a + 1 + i : a + i;
+    if (m.sh.getIndex() === koht) return;
+    pub.setActiveSheet(m.sh);
+    pub.moveActiveSheet(koht);
+  });
+  KUUD_ = null;
 }
 
 // Kui plaanis muudetakse kuud, mis pole veel alanud, jõuab muudatus kuu vahekaardile.
@@ -1866,6 +1896,7 @@ function uuenda_(pub) {
       proovi('ülevaade', function () { valemid_(ajutine.getSheetByName(T_BOARD), pub.getSheetByName(T_BOARD)); });
       proovi('edetabel', function () { edetabel_(pub, ajutine.getSheetByName(T_BOARD)); });
       proovi('loosivõitjad', function () { voitjadVaade_(pub, true); });   // edetabel_ tühjendas ka selle ala
+      proovi('vana kuu', function () { vanadKuud_(pub); });
       proovi('autahvli valemid', function () {
         var mf = ajutine.getSheetByName(T_FAME), f = pub.getSheetByName(T_FAME);
         if (!mf || !f) return;
@@ -2940,6 +2971,7 @@ function kiire_() {
         tekstid_(pub);
         lisaVorming_(pub);
         topeltElus_(g);
+        vanadKuud_(pub);
       });
     } catch (err) { Logger.log('Kiire uuendus: ' + (err && err.message ? err.message : err)); }
   });
@@ -3682,7 +3714,7 @@ null
 "DCE1E8": "E6DED3"
 }
 };
-var EHITUS = '598319ae8acb';
+var EHITUS = 'c7b6320b3454';
 var KH_XLSX = [
   "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",
