@@ -92,21 +92,30 @@ function uuenda_() {
   var projektid = [];
   uued.forEach(function (u) { if (projektid.indexOf(u.s.projekt) < 0) projektid.push(u.s.projekt); });
   projektid.sort(function (a, b) { return (a === 'ISE') - (b === 'ISE'); });
-  var tehtud = [];
+  var tehtud = [], vead = [];
   projektid.forEach(function (pr) {
-    var id = projektiId_(pr, omad);
     var siin = uued.filter(function (u) { return u.s.projekt === pr; });
-    var failid = loeProjekt_(id);
-    var muutus = false;
-    siin.forEach(function (u) {
-      var f = leiaFail_(failid, u.s);
-      var tekst = peidetud_(u, f.source, omad);
-      if (f.source !== tekst) { f.source = tekst; muutus = true; tehtud.push(u.s.nimi); }
-    });
-    if (muutus) kirjutaProjekt_(id, failid);
-    siin.forEach(function (u) { omad.setProperty('rasi:' + u.s.nimi, u.rasi); });
+    try {                                                    // ühe skripti viga ei peata teiste uuendamist
+      var id = projektiId_(pr, omad);
+      var failid = loeProjekt_(id);
+      var muutus = false, nimed = [];
+      siin.forEach(function (u) {
+        var f = leiaFail_(failid, u.s);
+        var tekst = peidetud_(u, f.source, omad);
+        if (f.source !== tekst) { f.source = tekst; muutus = true; nimed.push(u.s.nimi); }
+      });
+      if (muutus) kirjutaProjekt_(id, failid);
+      tehtud = tehtud.concat(nimed);
+      siin.forEach(function (u) { omad.setProperty('rasi:' + u.s.nimi, u.rasi); });
+    } catch (e) {
+      vead.push('„' + siin.map(function (u) { return u.s.nimi; }).join(', ') + '“: ' + String(e && e.message || e));
+    }
   });
 
+  if (vead.length) {                                         // proovib järgmisel minutil uuesti; kiri sama vea kohta ainult üks kord
+    teataViga_(vead.join('\n'));
+    return (tehtud.length ? 'Uuendasin: ' + tehtud.join(', ') + '. ' : '') + 'Vead: ' + vead.join(' | ');
+  }
   omad.deleteProperty('viga');
   omad.setProperty('muudatus', muudatus);
   if (!tehtud.length) return 'Uued versioonid olid juba sees.';
