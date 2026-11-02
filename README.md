@@ -5,6 +5,7 @@ Privaatne. „Kuu harjutuse uuendaja“ (Apps Script) loeb siit lugemisvõtmega 
 - `uuendaja.json`: mida uuendada (projekt, faili tunnus, allikas, lõpumärk, peidetud väärtused)
 - `kuu-harjutus-skript.gs`: Kuu harjutus (ehitatakse projekti failides `.builder/` all)
 - `hinnalugeja.gs`: rühmatrennide hinnalugeja / Arhiiv & tähtajad & tasud. „Bilans 2026“ tabeli ID asemel on `__BILANSS_FAILI_ID__`, uuendaja paneb päris ID tagasi.
+- `arsenal.gs`: Arsenali üür/kommunaalid ja Telia arved Gmailist → „Bilans 2026“ (beatbeatinc@gmail.com konto skript). Tabeli ID asemel `__ARSENAL_BILANSS_ID__`. Hoiatab puuduva kuu eest alles siis, kui arve tähtaeg (`AR.due`) on möödas.
 - `uuendaja.gs`: uuendaja ise (uuendab ka iseennast)
 
-Iga fail peab lõppema oma lõpumärgiga (`SKRIPTI LÕPP`, `HINNALUGEJA LÕPP`, `UUENDAJA LÕPP`), muidu uuendaja keeldub.
+Iga fail peab lõppema oma lõpumärgiga (`SKRIPTI LÕPP`, `HINNALUGEJA LÕPP`, `ARSENALI LÕPP`, `UUENDAJA LÕPP`), muidu uuendaja keeldub.
