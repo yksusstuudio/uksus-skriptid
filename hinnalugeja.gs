@@ -415,6 +415,8 @@ function runArchiveAndDueList() {
   } finally { lock.releaseLock(); }
 }
 function nightly() {
+  // Kuu harjutuse päästikute varukontroll (Erik 2.11: „et ta ei lülituks välja no matter what“): lisab puuduvad, midagi ei kustuta.
+  try { if (typeof kuuHarjutusPaastikud === "function") kuuHarjutusPaastikud(); } catch (e) { Logger.log("Kuu harjutuse päästikud: " + e); }
   var sp = PropertiesService.getScriptProperties();
   if (sp.getProperty("PAUSED") === "yes") return;
   var lock = LockService.getDocumentLock();
