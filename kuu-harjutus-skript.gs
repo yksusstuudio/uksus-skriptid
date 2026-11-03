@@ -442,7 +442,11 @@ function muudatus1_(e) {
     var lock = LockService.getScriptLock();
     if (!lock.tryLock(25000)) { nimekiriTaimer_(); return; }   // Erik 3.10: nimi jäi ilma kuupäevata; proovi umbes minuti pärast uuesti, mitte alles öösel
     var teated = [];
-    try { laienda_(e.source); teated = sobita_(e.source, tana_(), true); } finally { lock.releaseLock(); }
+    try {
+      laienda_(e.source); teated = sobita_(e.source, tana_(), true);
+      if (pausidLoppu_(e.source, tana_(), true))               // Erik 3.11: uus nimi kohe pausil olijate ette, mitte alles öösel
+        try { e.source.toast('Nimi tõsteti pausil olijate ette, et kuu vahekaardile ei jääks tühje ridu. / The name moved above the paused people, so the month tab has no empty rows.', 'Kuu harjutus', 10); } catch (err) {}
+    } finally { lock.releaseLock(); }
     teata_(e, teated);
     return;
   }
@@ -660,7 +664,7 @@ function nimekiri() {
     p.deleteProperty('NIMEKIRI_PROOVID');
     koigile_(null, function () {
       var pub = avalik_();
-      if (pub) { laienda_(pub); sobita_(pub, tana_(), true, true); }
+      if (pub) { laienda_(pub); sobita_(pub, tana_(), true, true); pausidLoppu_(pub, tana_(), true); }
     });
   } finally { lock.releaseLock(); }
 }
@@ -1175,7 +1179,10 @@ function pausidOosel_(pub) {
   if (Number(Utilities.formatDate(new Date(), TZ, 'HH')) < 6) pausidLoppu_(pub, tana_());
 }
 
-function pausidLoppu_(pub, t) {
+// paev = true (nimekirja muudatus päeval, Erik 3.11): liiguvad ainult pausil olijad, kelle rida on käimasolevas kuus täiesti tühi,
+// ja nende alla lisatud uued nimed tõusevad nende ette. Pausil olijad, kes käimasolevat kuud veel teevad, jäävad paigale kuni ööni,
+// nii ei nihku päeval ühtegi rida, kuhu keegi parasjagu kirjutab.
+function pausidLoppu_(pub, t, paev) {
   var ro = pub.getSheetByName(T_ROSTER);
   if (nimekirjaKohti_(ro) < N) return false;
   var ala = ro.getRange(RR0, 2, N, 5), v = ala.getValues(), osaleb = [], pausNimega = [], pausTyhi = [], tyhi = [];
@@ -1186,10 +1193,16 @@ function pausidLoppu_(pub, t) {
     if (!str_(r[0]) && !str_(r[3])) { tyhi.push(k); return; }
     var auk = nimed.some(function (a) { return !a[k]; });     // mõnel elaval kuu vahekaardil on tema rida tühi
     if (str_(r[1]) !== PAUSE || !auk) osaleb.push(k);
+    else if (paev && (praegu < 0 || nimed[praegu][k])) osaleb.push(k);   // päeval jääb ta oma kohale
     else if (praegu >= 0 && nimed[praegu][k]) pausNimega.push(k);   // teeb käimasoleva kuu lõpuni (järgmises kuus teda pole)
     else pausTyhi.push(k);
   });
   var p = osaleb.concat(pausNimega, pausTyhi, tyhi);
+  if (paev) {                                               // päeval jäävad tühjad read ja eemaldatavad (Eemalda/Kinnitan samas lahtris) oma kohale
+    var paigal = function (k) { return tyhi.indexOf(k) >= 0 || str_(v[k][1]) === REMOVE || str_(v[k][1]) === CONFIRM; };
+    var jada = osaleb.concat(pausTyhi).filter(function (k) { return !paigal(k); }), j = 0;
+    p = v.map(function (r, k) { return paigal(k) ? k : jada[j++]; });
+  }
   if (p.every(function (k, i) { return k === i; })) return false;
   var rn = ala.getNotes();                                  // märkused (nt automaatse pausi selgitus) liiguvad inimesega kaasa
   // Nimereegel (iga nimi üks kord, ülemine rida täis) lükkaks ümbertõstmise vahepealse seisu tagasi (2.11 päris tabelis), seepärast ajutiselt maha.
@@ -3870,7 +3883,7 @@ null
 "DCE1E8": "E6DED3"
 }
 };
-var EHITUS = '4b5bd652fac1';
+var EHITUS = '991429ee2531';
 var KH_XLSX = [
   "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",
