@@ -38,6 +38,19 @@
       ]
     },
     {
+      "nimi": "Arsenal + Telia arved",
+      "projekt": "1T9rTOo3oanLecTiVg0a7QdGiRebRb4wxc0FAHTKDh1ELJJAn_n2zdlzc",
+      "tunnus": "ARSENAL + TELIA ARVED → BILANS 2026",
+      "allikas": "arsenal.gs",
+      "lopp": "ARSENALI LÕPP",
+      "peidetud": [
+        {
+          "kohataide": "__ARSENAL_BILANSS_ID__",
+          "muster": "fileId: \"([A-Za-z0-9_-]{25,})\""
+        }
+      ]
+    },
+    {
       "nimi": "Kuu harjutuse uuendaja",
       "projekt": "ISE",
       "tunnus": "Kuu harjutuse uuendaja",
