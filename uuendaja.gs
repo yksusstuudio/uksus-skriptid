@@ -17,6 +17,8 @@ var GITHUBI_VOTI = 'PANE_SIIA_GITHUBI_VOTI';
 var HOIDLA = 'https://api.github.com/repos/yksusstuudio/uksus-skriptid/contents/';
 var SEADED = 'uuendaja.json';
 var VAHE = 1;                                                // mitme minuti järel kontrollib (Erik 27.10: et oleks kohe)
+var OIGUSE_OOTUS = 30;                                       // kui skriptile pole ligipääsu, proovib sellega uuesti alles mitme minuti pärast
+var AJUTINE_TUNDE = 24;                                      // ajutisest tõrkest (503 jms) kirjutab alles siis, kui see kestab nii mitu tundi
 
 function paigalda() {
   PropertiesService.getScriptProperties().deleteProperty('vahe');
@@ -32,7 +34,8 @@ function uuenda() {
     kaivitus_();
     return uuenda_();
   } catch (e) {
-    teataViga_(String(e && e.message || e));
+    if (onAjutine_(e, 'üldine')) return 'Ajutine tõrge, proovin järgmisel minutil uuesti: ' + e.message;
+    teataViga_('üldine:' + (e && e.voti || String(e && e.message || e)), String(e && e.message || e));
     throw e;
   } finally {
     lukk.releaseLock();
@@ -86,15 +89,17 @@ function uuenda_() {
     var rasi = rasi_(tekst);
     if (omad.getProperty('rasi:' + s.nimi) !== rasi) uued.push({ s: s, tekst: tekst, rasi: rasi });
   });
-  if (!uued.length) { omad.setProperty('muudatus', muudatus); return 'Uut versiooni pole.'; }
+  if (!uued.length) { korras_('üldine'); omad.setProperty('muudatus', muudatus); return 'Uut versiooni pole.'; }
 
   // Iga projekt korraga: üks lugemine, üks kirjutamine. Uuendaja ise viimasena.
   var projektid = [];
   uued.forEach(function (u) { if (projektid.indexOf(u.s.projekt) < 0) projektid.push(u.s.projekt); });
   projektid.sort(function (a, b) { return (a === 'ISE') - (b === 'ISE'); });
-  var tehtud = [], vead = [];
+  var tehtud = [], vead = [], ootel = false;
   projektid.forEach(function (pr) {
     var siin = uued.filter(function (u) { return u.s.projekt === pr; });
+    var nimi = siin.map(function (u) { return u.s.nimi; }).join(', ');
+    if (Number(omad.getProperty('oota:' + pr) || 0) > Date.now()) { ootel = true; return; }   // ligipääs puudus hiljuti, ei koputa iga minut
     try {                                                    // ühe skripti viga ei peata teiste uuendamist
       var id = projektiId_(pr, omad);
       var failid = loeProjekt_(id);
@@ -107,16 +112,25 @@ function uuenda_() {
       if (muutus) kirjutaProjekt_(id, failid);
       tehtud = tehtud.concat(nimed);
       siin.forEach(function (u) { omad.setProperty('rasi:' + u.s.nimi, u.rasi); });
+      korras_(pr);
     } catch (e) {
-      vead.push('„' + siin.map(function (u) { return u.s.nimi; }).join(', ') + '“: ' + String(e && e.message || e));
+      var tekst = String(e && e.message || e);
+      vead.push('„' + nimi + '“: ' + tekst);
+      if (onAjutine_(e, pr)) return;                         // 503 jms: vaikselt uuesti järgmisel minutil
+      if (e && e.liik === 'oigus') {
+        omad.setProperty('oota:' + pr, String(Date.now() + OIGUSE_OOTUS * 60000));
+        teataViga_(pr + ':oigus', oiguseJuhis_(nimi, projektiId_(pr, omad)));
+      } else {
+        teataViga_(pr + ':' + (e && e.voti || tekst), '„' + nimi + '“: ' + tekst);
+      }
     }
   });
 
-  if (vead.length) {                                         // proovib järgmisel minutil uuesti; kiri sama vea kohta ainult üks kord
-    teataViga_(vead.join('\n'));
-    return (tehtud.length ? 'Uuendasin: ' + tehtud.join(', ') + '. ' : '') + 'Vead: ' + vead.join(' | ');
+  if (vead.length || ootel) {                                // proovib uuesti; kiri sama vea kohta ainult üks kord
+    return (tehtud.length ? 'Uuendasin: ' + tehtud.join(', ') + '. ' : '') +
+      (vead.length ? 'Vead: ' + vead.join(' | ') : 'Mõni skript ootab ligipääsu.');
   }
-  omad.deleteProperty('viga');
+  korras_('üldine');
   omad.setProperty('muudatus', muudatus);
   if (!tehtud.length) return 'Uued versioonid olid juba sees.';
   return 'Uuendasin: ' + tehtud.join(', ') + '.';
@@ -141,8 +155,9 @@ function peidetud_(u, praegu, omad) {
 
 function lae_(tee, aadress, kuju) {
   var voti = PropertiesService.getScriptProperties().getProperty('GITHUBI_VOTI');
-  var r = UrlFetchApp.fetch(aadress || HOIDLA + encodeURI(tee) + '?ref=main', { muteHttpExceptions: true,
+  var r = paring_(aadress || HOIDLA + encodeURI(tee) + '?ref=main', { muteHttpExceptions: true,
     headers: { Authorization: 'Bearer ' + voti, Accept: kuju || 'application/vnd.github.raw', 'X-GitHub-Api-Version': '2022-11-28' } });
+  if (r.getResponseCode() >= 500 || r.getResponseCode() === 429) throw viga_('GitHub oli hetkel kättesaamatu (kood ' + r.getResponseCode() + ').', 'ajutine');
   if (r.getResponseCode() === 401) throw new Error('GitHubi lugemisvõti ei kehti enam (aegus või kustutati). Tee uus võti ja kirjuta see koodi ülaossa GITHUBI_VOTI reale, siis käivita „paigalda“.');
   if (r.getResponseCode() !== 200) throw new Error('Faili ' + (tee || 'muudatuste nimekiri') + ' ei saanud GitHubist kätte (kood ' + r.getResponseCode() + ').');
   return r.getContentText('UTF-8');
@@ -167,43 +182,101 @@ function leiaFail_(failid, s) {
 }
 
 function loeProjekt_(id) {
-  var r = UrlFetchApp.fetch('https://script.googleapis.com/v1/projects/' + id + '/content',
+  var r = paring_('https://script.googleapis.com/v1/projects/' + id + '/content',
     { headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() }, muteHttpExceptions: true });
-  if (r.getResponseCode() !== 200) throw new Error(apiViga_(r));
+  if (r.getResponseCode() !== 200) throw apiViga_(r);
   return (JSON.parse(r.getContentText()).files || []).map(function (f) { return { name: f.name, type: f.type, source: f.source }; });
 }
 
 function kirjutaProjekt_(id, failid) {
-  var r = UrlFetchApp.fetch('https://script.googleapis.com/v1/projects/' + id + '/content', {
+  var r = paring_('https://script.googleapis.com/v1/projects/' + id + '/content', {
     method: 'put', contentType: 'application/json', headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
     payload: JSON.stringify({ files: failid }), muteHttpExceptions: true
   });
-  if (r.getResponseCode() !== 200) throw new Error(apiViga_(r));
+  if (r.getResponseCode() !== 200) throw apiViga_(r);
 }
 
 function rasi_(tekst) {
   return Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, tekst, Utilities.Charset.UTF_8));
 }
 
-function apiViga_(r) {
-  var tekst = r.getContentText();
-  if (r.getResponseCode() === 403 && /has not been used in project|SERVICE_DISABLED/i.test(tekst)) {
-    return 'Selle uuendaja Google Cloudi projektis on Apps Script API sisse lülitamata (vaata seadistuslehe Google Cloudi samme). Google: ' + tekst.slice(0, 300);
-  }
-  if (r.getResponseCode() === 403 && /Apps Script API/i.test(tekst)) {
-    return 'Apps Script API on välja lülitatud. Lülita see sisse: https://script.google.com/home/usersettings (Google: ' + tekst.slice(0, 200) + ')';
-  }
-  if (r.getResponseCode() === 404) return 'Sellise ID-ga skripti ei leitud. Kontrolli skripti ID-d.';
-  return 'Google vastas veaga ' + r.getResponseCode() + ': ' + tekst.slice(0, 300);
+function viga_(tekst, liik, voti) {
+  var e = new Error(tekst);
+  e.liik = liik || '';
+  e.voti = voti || '';
+  return e;
 }
 
-// Sama vea kohta saadab kirja ainult ühe korra, et postkast ei täituks.
-function teataViga_(tekst) {
+// Võrgutõrge (aegumine, DNS) on ajutine nagu 503.
+function paring_(aadress, valikud) {
+  try {
+    return UrlFetchApp.fetch(aadress, valikud);
+  } catch (e) {
+    throw viga_('Ühendus katkes (' + String(e && e.message || e).slice(0, 100) + ').', 'ajutine');
+  }
+}
+
+// Kirja läheb ainult lühike selgitus, mitte Google'i HTML-leht.
+function apiViga_(r) {
+  var kood = r.getResponseCode(), tekst = r.getContentText(), sonum = '';
+  try { sonum = JSON.parse(tekst).error.message || ''; } catch (e) { sonum = ''; }
+  if (kood >= 500 || kood === 429) return viga_('Google oli hetkel üle koormatud (kood ' + kood + ').', 'ajutine');
+  if (kood === 403 && /has not been used in project|SERVICE_DISABLED/i.test(tekst)) {
+    return viga_('Selle uuendaja Google Cloudi projektis on Apps Script API sisse lülitamata (vaata seadistuslehe Google Cloudi samme). Google: ' + (sonum || tekst.slice(0, 200)), '', 'api-pilv');
+  }
+  if (kood === 403 && /Apps Script API/i.test(tekst)) {
+    return viga_('Apps Script API on välja lülitatud. Lülita see sisse: https://script.google.com/home/usersettings', '', 'api-kasutaja');
+  }
+  if (kood === 403) return viga_('Uuendajal pole sellele skriptile ligipääsu (403).', 'oigus', 'oigus');
+  if (kood === 404) return viga_('Sellise ID-ga skripti ei leitud. Kontrolli skripti ID-d.', '', '404');
+  return viga_('Google vastas veaga ' + kood + (sonum ? ': ' + sonum : '') + '.', '', 'kood' + kood);
+}
+
+function oiguseJuhis_(nimi, id) {
+  var mina = Session.getEffectiveUser().getEmail();
+  return '„' + nimi + '“ jäi uuendamata, sest uuendaja ei pääse sellele skriptile ligi. ' +
+    'Uuendaja töötab kontoga ' + mina + ', aga see skript kuulub teisele Google kontole.\n\n' +
+    'Tee üks kord nii:\n' +
+    '1. Ava see skript selle kontoga, kellele skript kuulub: https://script.google.com/d/' + id + '/edit\n' +
+    '2. Vajuta paremal üleval „Jaga“, lisa ' + mina + ' ja vali „Muutja“. ' +
+    'Kui skript on tabeli küljes ja „Jaga“ nuppu ei ole, jaga samamoodi seda tabelit.\n\n' +
+    'Uuendaja proovib iga ' + OIGUSE_OOTUS + ' minuti järel ise uuesti, rohkem ei pea sa midagi tegema. ' +
+    'Selle vea kohta rohkem kirju ei tule. Seni töötab „' + nimi + '“ vana koodiga edasi.';
+}
+
+// Ajutine tõrge (503, 429, võrk): kirja ei saadeta. Ainult siis tuleb üks kiri, kui see kestab üle AJUTINE_TUNDE tunni.
+function onAjutine_(e, koht) {
+  if (!e || e.liik !== 'ajutine') return false;
+  var omad = PropertiesService.getScriptProperties(), voti = 'ajutine:' + koht;
+  var algus = Number(omad.getProperty(voti) || 0);
+  if (!algus) { omad.setProperty(voti, String(Date.now())); return true; }
+  if (Date.now() - algus > AJUTINE_TUNDE * 3600000) {
+    teataViga_(koht + ':ajutine', e.message + ' See tõrge on kestnud üle ' + AJUTINE_TUNDE +
+      ' tunni. Tavaliselt läheb see ise üle ja uuendaja proovib edasi.');
+  }
+  return true;
+}
+
+// Skript läks korda: unusta selle vead, et uus viga tuleks jälle kirjaga.
+function korras_(koht) {
   var omad = PropertiesService.getScriptProperties();
-  if (omad.getProperty('viga') === tekst) return;
-  omad.setProperty('viga', tekst);
+  omad.deleteProperty('ajutine:' + koht);
+  omad.deleteProperty('oota:' + koht);
+  var teatatud = JSON.parse(omad.getProperty('teatatud') || '{}'), muutus = false;
+  Object.keys(teatatud).forEach(function (k) { if (k.indexOf(koht + ':') === 0) { delete teatatud[k]; muutus = true; } });
+  if (muutus) omad.setProperty('teatatud', JSON.stringify(teatatud));
+}
+
+// Iga vea kohta saadab kirja ainult ühe korra (kuni see skript jälle korda läheb), et postkast ei täituks.
+function teataViga_(voti, tekst) {
+  var omad = PropertiesService.getScriptProperties();
+  omad.deleteProperty('viga');                               // vana uuendaja mälu
+  var teatatud = JSON.parse(omad.getProperty('teatatud') || '{}');
+  if (teatatud[voti]) return;
+  teatatud[voti] = 1;
+  omad.setProperty('teatatud', JSON.stringify(teatatud));
   MailApp.sendEmail(Session.getEffectiveUser().getEmail(), 'Kuu harjutuse uuendaja: uuendus jäi tegemata',
-    tekst + '\n\nVanad skriptid töötavad edasi nagu enne.');
+    tekst + '\n\nTeised skriptid töötavad edasi nagu enne.');
 }
 
 // ================================================================ UUENDAJA LÕPP
