@@ -237,7 +237,7 @@ function oiguseJuhis_(nimi, id) {
   return '„' + nimi + '“ jäi uuendamata, sest uuendaja ei pääse sellele skriptile ligi. ' +
     'Uuendaja töötab kontoga ' + mina + ', aga see skript kuulub teisele Google kontole.\n\n' +
     'Tee üks kord nii:\n' +
-    '1. Ava see skript selle kontoga, kellele skript kuulub: https://script.google.com/d/' + id + '/edit\n' +
+    '1. Ava see skript selle kontoga, kellele skript kuulub: https://script.google.com/home/projects/' + id + '/edit\n' +
     '2. Vajuta paremal üleval „Jaga“, lisa ' + mina + ' ja vali „Muutja“. ' +
     'Kui skript on tabeli küljes ja „Jaga“ nuppu ei ole, jaga samamoodi seda tabelit.\n\n' +
     'Uuendaja proovib iga ' + OIGUSE_OOTUS + ' minuti järel ise uuesti, rohkem ei pea sa midagi tegema. ' +
