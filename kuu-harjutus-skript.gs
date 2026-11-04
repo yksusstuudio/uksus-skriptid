@@ -99,7 +99,7 @@ function menuu() {
 }
 
 // Selle skripti päästikud (ka vanade versioonide omad). Teiste skriptide päästikutesse ei puutu.
-var MINU_PAASTIKUD = ['kuuHarjutusMenuu', 'kuuHarjutusOine', 'kuuHarjutusHommik', 'kuuHarjutusMuudatus', 'kuuHarjutusPlaan', 'kuuHarjutusYlevaade', 'kuuHarjutusNimekiri', 'kuuHarjutusVersioon', 'oine', 'hommik', 'muudatus'];
+var MINU_PAASTIKUD = ['kuuHarjutusMenuu', 'kuuHarjutusOine', 'kuuHarjutusHommik', 'kuuHarjutusMuudatus', 'kuuHarjutusPlaan', 'kuuHarjutusYlevaade', 'kuuHarjutusNimekiri', 'kuuHarjutusKloon', 'kuuHarjutusVersioon', 'oine', 'hommik', 'muudatus'];
 
 // Ühekordne seadistus. Võib käivitada ka mitu korda: olemasolevat ühist tabelit ta uuesti ei tee.
 // Google peatab skripti 6 minuti pärast. Kui aega jääb väheks, jätab Seadista järgmise grupi tabeli uuenduse ja öise
@@ -417,10 +417,11 @@ function kysitlus_(k) {
 function muudatus(e) {
   if (!e || !e.range) return;
   var g = e.source ? PropertiesService.getScriptProperties().getProperty('GRUPP:' + e.source.getId()) : null;
-  if (g) return grupiga_(g, function () { muudatus1_(e); kloonEdasi_(e); });
+  // Erik 4.11: Eriku tulemus ei jõudnud kohe Swedi. Kopeerimine käib ka siis, kui muu töötlus viskas vea.
+  var tee = function () { try { muudatus1_(e); } finally { kloonEdasi_(e); } };
+  if (g) return grupiga_(g, tee);
   GRUPP_ = null;
-  muudatus1_(e);
-  kloonEdasi_(e);
+  tee();
 }
 
 function muudatus1_(e) {
@@ -483,11 +484,45 @@ function kloonEdasi_(e) {
   var k = kloonRida_(e.source);
   if (k < 0 || R0 + k < r.getRow() || R0 + k > r.getLastRow()) return;
   var lock = LockService.getScriptLock(), muutus = false;
-  if (!lock.tryLock(20000)) return;                          // öine hooldus teeb selle järgi
-  try { muutus = kloon_(tana_(), m.start); } finally { lock.releaseLock(); }
+  if (!lock.tryLock(20000)) { kloonTaimer_('lukk'); return; }   // Erik 4.11: ei jää enam ööd ootama, proovib minuti pärast uuesti
+  try { muutus = kloon_(tana_(), m.start); }
+  catch (err) { kloonTaimer_(err && err.message ? err.message : String(err)); }
+  finally { lock.releaseLock(); }
   if (GRUPP_ && muutus) teata_({ range: sh.getRange(R0 + k, Math.max(r.getColumn(), 2)), source: e.source },
     [KLOON + ' kirjutab oma tulemused põhigrupi tabelisse ja need tulevad siia ise. Siin tehtud muudatus võeti tagasi. / ' +
      KLOON + '\'s results come from the main group\'s sheet, so this change was undone.']);
+}
+
+// Kopeerimine jäi tegemata (skript oli hõivatud või tuli viga): umbes minuti pärast proovitakse uuesti (kuni 10 korda),
+// minutikontroll teeb sama, kui ühekordne päästik peaks kaduma. Viimane abinõu on öine samm.
+var KLOON_PAASTIK = 'kuuHarjutusKloon';
+function kloonTaimer_(miks) {
+  var p = PropertiesService.getScriptProperties();
+  if (!p.getProperty('KLOON_OOTEL')) p.setProperty('KLOON_OOTEL', String(Date.now()));
+  try { Logger.log('Eriku kopeerimine ootel: ' + miks); } catch (err) {}
+  try {
+    if (ScriptApp.getProjectTriggers().some(function (x) { return x.getHandlerFunction() === KLOON_PAASTIK; })) return;
+    ScriptApp.newTrigger(KLOON_PAASTIK).timeBased().after(60 * 1000).create();
+  } catch (err) {}
+}
+function kloonOotel() {
+  var p = PropertiesService.getScriptProperties();
+  try { ScriptApp.getProjectTriggers().forEach(function (x) { if (x.getHandlerFunction() === KLOON_PAASTIK) ScriptApp.deleteTrigger(x); }); } catch (err) {}
+  if (!p.getProperty('KLOON_OOTEL') || !p.getProperty('PRIV_ID')) return;
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(20000)) { kloonUuesti_(p, 'lukk'); return; }
+  try {
+    GRUPP_ = null; KUUD_ = null;
+    kloon_(tana_());
+    p.deleteProperty('KLOON_OOTEL'); p.deleteProperty('KLOON_PROOVID');
+  } catch (err) { kloonUuesti_(p, err && err.message ? err.message : String(err)); }
+  finally { lock.releaseLock(); }
+}
+function kloonUuesti_(p, miks) {
+  var n = Number(p.getProperty('KLOON_PROOVID')) || 0;
+  if (n >= 10) { p.deleteProperty('KLOON_OOTEL'); p.deleteProperty('KLOON_PROOVID'); return; }   // öine samm teeb ära
+  p.setProperty('KLOON_PROOVID', String(n + 1));
+  kloonTaimer_(miks);
 }
 
 // Eriku koht nimekirjas (0 …), -1 kui teda pole.
@@ -722,11 +757,12 @@ function hooldus1_() {
     samm('päevad', function () { kuulehed_(pub, true).forEach(function (m) { if (!m.frozen) puhastaPaevad2_(m); }); });
     samm('tasemed', function () { tasemed_(pub, t); });
     samm('graafik', function () { graafik_(pub); });
-    samm('loosivõitjad', function () { voitjadVaade_(pub, false); });
     if (plan) samm('auhinnad', function () { auhinnad_(plan); });
+    samm('loosivõitjad', function () { voitjadVaade_(pub, false); });
     samm('kuu lõpp', function () {
       kuulehed_(pub).forEach(function (m) { if (!m.frozen && t > m.end + 1) kylmuta_(pub, m); });
     });
+    samm('loosi vahekaart', function () { KUUD_ = null; loosiLeht_(pub, plan); if (varuloos_(pub)) voitjadVaade_(pub, true); });
     if (plan) samm('postituste tekstid', function () { postiValemid_(plan); });
     if (plan && GRUPP_) samm('grupi valemid', function () { var p = grupid_(priv)[0]; if (p) grupiValemid_(plan, p); });
     if (GRUPP_) samm('pealkiri', function () { pealkiri_(pub); });
@@ -1979,6 +2015,7 @@ function uuenda_(pub) {
       });
       proovi('ülevaade', function () { valemid_(ajutine.getSheetByName(T_BOARD), pub.getSheetByName(T_BOARD)); });
       proovi('edetabel', function () { edetabel_(pub, ajutine.getSheetByName(T_BOARD)); });
+      proovi('loosi vahekaart', function () { loosiLeht_(pub, plaan_(privaatne_())); });
       proovi('loosivõitjad', function () { voitjadVaade_(pub, true); });   // edetabel_ tühjendas ka selle ala
       proovi('vana kuu', function () { vanadKuud_(pub); });
       proovi('automaatne paus', function () { KUUD_ = null; autoPaus_(pub, plaan_(privaatne_()), tana_()); });   // kui öine töö jäi vahele (Erik 2.11)
@@ -2360,7 +2397,7 @@ function plaaniMuudatus1_(e, sh) {
   var tekst, p = props_();
   p.setProperty('NUPP_KAIB:' + a1, String(Date.now()));
   try {
-    tekst = a1 === C_LOOS ? loosi_(sh).tekst : a1 === C_KUU ? looKuuKohe_().tekst : saadaProov_(sh).tekst;
+    tekst = a1 === C_LOOS ? loosiLukuga_(sh) : a1 === C_KUU ? looKuuKohe_().tekst : saadaProov_(sh).tekst;
   } catch (err) { tekst = 'Ei õnnestunud: ' + (err && err.message ? err.message : err); }
   sh.getRange(nupp[a1]).setValue(txt_(tekst));
   e.range.setValue(false);
@@ -2417,30 +2454,37 @@ function veeb() {
   catch (err) { seis = 'Päästikuid ei saanud kontrollida: ' + (err && err.message ? err.message : err); }
   var nupud = grupid_(priv).filter(Boolean).map(function (g) {
     var nimi = grupiNimi_(g), silt = nimi ? nimi + ' grupp' : 'Põhigrupp';
-    return '<button onclick="loosi(this,\'' + html_(nimi).replace(/'/g, '') + '\')">🎟️ Loosi võitjad: ' + html_(silt) + '</button>';
+    var g1 = html_(nimi).replace(/'/g, '');
+    return '<button onclick="loosi(this,\'' + g1 + '\',false)">🎟️ Loosi võitjad: ' + html_(silt) + '</button>' +
+      '<button class="proov" onclick="loosi(this,\'' + g1 + '\',true)">Proovi (ei salvesta): ' + html_(silt) + '</button>';
   }).join('');
   var html = '<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>' +
     'body{font-family:Arial,sans-serif;background:#FBF8F3;color:#2B241E;margin:0;padding:18px}h1{font-size:22px;margin:0 0 6px}' +
     'p{font-size:14px;line-height:1.45}button{display:block;width:100%;font-size:18px;font-weight:bold;padding:16px;margin:12px 0;border:0;border-radius:10px;background:#8B6B47;color:#fff}' +
-    'button:disabled{background:#B0A698}#tulemus{font-size:15px;line-height:1.5;background:#fff;border:1px solid #E6DED3;border-radius:10px;padding:12px;white-space:pre-wrap;display:none}' +
+    'button.proov{background:#fff;color:#8B6B47;border:2px solid #8B6B47;font-size:15px;padding:10px}button:disabled{background:#B0A698;color:#fff}#tulemus{font-size:15px;line-height:1.5;background:#fff;border:1px solid #E6DED3;border-radius:10px;padding:12px;white-space:pre-wrap;display:none}' +
     '.vaike{font-size:12px;color:#6E655B}</style></head><body><h1>Kuu harjutus</h1>' +
-    '<p>Vajuta nuppu: tabel loosib eelmise kuu piletite järgi kõik auhinnad ja võitjad tulevad kohe vahekaartidele „Ülevaade“ ja „Autahvel“. Teine vajutus uut loosi ei tee.</p>' +
+    '<p>Vajuta nuppu: tabel loosib eelmise kuu piletite järgi kõik auhinnad ja võitjad tulevad kohe vahekaartidele „Ülevaade“ ja „Autahvel“. Teine vajutus uut loosi ei tee. ' +
+    '„Proovi“ teeb loosi läbi, aga ei salvesta midagi: sellega saad enne trenni kontrollida, et kõik töötab.</p>' +
     nupud + '<div id="tulemus"></div><p class="vaike">' + html_(seis) + ' Versioon ' + html_(EHITUS) + '.</p>' +
-    '<script>function loosi(b,g){var t=document.getElementById("tulemus");document.querySelectorAll("button").forEach(function(x){x.disabled=true;});' +
-    'b.textContent="Loosin…";t.style.display="none";google.script.run.withSuccessHandler(function(r){t.textContent=r;t.style.display="block";b.textContent="Valmis";})' +
-    '.withFailureHandler(function(e){t.textContent="Ei õnnestunud: "+(e&&e.message?e.message:e);t.style.display="block";document.querySelectorAll("button").forEach(function(x){x.disabled=false;});b.textContent="Proovi uuesti";})' +
-    '.kuuHarjutusVeebiLoos(g);}</script></body></html>';
+    '<script>function loosi(b,g,p){var t=document.getElementById("tulemus"),s=b.textContent,a=Date.now(),koik=document.querySelectorAll("button");koik.forEach(function(x){x.disabled=true;});' +
+    'b.textContent="Loosin…";t.style.display="none";var vaba=function(){koik.forEach(function(x){x.disabled=false;});b.textContent=s;};' +
+    'var kell=setTimeout(function(){t.textContent="Vastust pole 10 sekundiga. Kasuta Loosiratast või varuloosi (vahekaart „Loos | Draw“, lahter B3).";t.style.display="block";},10000);' +
+    'google.script.run.withSuccessHandler(function(r){clearTimeout(kell);t.textContent=r+" ("+((Date.now()-a)/1000).toFixed(1)+" s)";t.style.display="block";vaba();})' +
+    '.withFailureHandler(function(e){clearTimeout(kell);t.textContent="Ei õnnestunud: "+(e&&e.message?e.message:e)+". Kasuta Loosiratast või varuloosi (vahekaart „Loos | Draw“, lahter B3).";t.style.display="block";vaba();})' +
+    '.kuuHarjutusVeebiLoos(g,p);}</script></body></html>';
   return HtmlService.createHtmlOutput(html).setTitle('Kuu harjutus · loos').addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
 
 // Veebilehe nupp: sama mis linnuke D32 selle grupi vahekaardil (tulemus ka E32-sse), aga ilma päästikuta.
-function veebiLoos(nimi) {
+function veebiLoos(nimi, proov) {
   var priv = privaatne_(), g = grupid_(priv).filter(function (x) { return x && grupiNimi_(x) === String(nimi || ''); })[0];
   if (!g) return 'Gruppi „' + nimi + '“ ei leitud.';
   return grupiga_(g, function () {
     var p = props_(), t;
     p.setProperty('NUPP_KAIB:' + C_LOOS, String(Date.now()));
-    try { t = loosi_(g).tekst; } catch (err) { t = 'Ei õnnestunud: ' + (err && err.message ? err.message : err); }
+    if (proov) return loosi_(g, { proov: true }).tekst;
+    p.setProperty('NUPP_KAIB:' + C_LOOS, String(Date.now()));
+    try { t = loosiLukuga_(g, 'veebileht'); } catch (err) { t = 'Ei õnnestunud: ' + (err && err.message ? err.message : err); }
     finally { p.deleteProperty('NUPP_KAIB:' + C_LOOS); }
     g.getRange(C_LOOS_TULEMUS).setValue(txt_(t));
     g.getRange(C_LOOS).setValue(false);
@@ -2454,6 +2498,10 @@ function veebiLoos(nimi) {
 function linnukesed_() {
   var p0 = PropertiesService.getScriptProperties();
   if (!p0.getProperty('PRIV_ID')) return;
+  // Erik 4.11: Google lubab päästikutele kokku 90 minutit päevas. Iga minut tabelit avada on kallis, seega ainult loosi ajal
+  // (kuu 1.–10. päev, kell 7–23). Mujal teeb linnuke oma töö muudatuse päästikuga nagu alati.
+  var nyyd = Utilities.formatDate(new Date(), TZ, 'd HH').split(' ').map(Number);
+  if (nyyd[0] > 10 || nyyd[1] < 7 || nyyd[1] >= 23) return;
   grupid_(privaatne_()).forEach(function (g) {
     if (!g) return;
     grupiga_(g, function () {
@@ -2471,9 +2519,22 @@ function linnukesed_() {
   });
 }
 
+// Linnuke D32 ja veebileht: sama loos, aga kaks korraga ei loosi (oma märge, mitte skripti lukk: Seadista hoiab lukku minuteid).
+function loosiLukuga_(sh, viis) {
+  var p = props_(), k = Number(p.getProperty('LOOS_KAIB')) || 0;
+  if (Date.now() - k < 45000) {
+    Utilities.sleep(6000);                                           // teine loos lõpeb tavaliselt mõne sekundiga
+    var o = loosOlek_();
+    return o ? 'Teine loos käis samal ajal ja on tehtud (' + o.aeg + '): ' + o.voitjad.map(function (w, i) { return (i + 1) + '. ' + w.nimi + ' – ' + w.et; }).join('; ') + '.'
+      : 'Teine loos käib parajasti. Vaata mõne sekundi pärast vahekaarti „Loos | Draw“ ühises tabelis.';
+  }
+  p.setProperty('LOOS_KAIB', String(Date.now()));
+  try { return loosi_(sh, { viis: viis || 'linnuke D32', kontroll: true }).tekst; } finally { p.deleteProperty('LOOS_KAIB'); }
+}
+
 // Menüüst: sama loos, tulemus aknas.
 function loosiMenuust() {
-  var plan = plaan_(), r = loosi_(plan);
+  var plan = plaan_(), r = loosi_(plan, { viis: 'menüü', kontroll: true });
   if (plan) plan.getRange(C_LOOS_TULEMUS).setValue(txt_(r.tekst));
   SpreadsheetApp.getUi().alert('Loos', r.tekst, SpreadsheetApp.getUi().ButtonSet.OK);
 }
@@ -2547,9 +2608,11 @@ function auhinnaLoend_(plan) {
 }
 
 // Viimane loos (igal grupil oma): { kuu: '2026-10', aeg: '3.11.2026', voitjad: [{ nimi, p, et, en }] }.
-function loosOlek_() {
+function loosOlek_(pub) {
+  try { var kirje = loosiKirje_(pub || avalik_()); if (kirje) return kirje; } catch (err) { Logger.log('Loosi vahekaart: ' + err); }
   try { var o = JSON.parse(props_().getProperty('LOOS') || 'null'); return o && o.kuu && o.voitjad ? o : null; } catch (err) { return null; }
 }
+function loosis_(n, uued) { return 'loosis oli ' + n + (n === 1 ? ' inimene' : ' inimest') + ', loositaks ' + uued.length + (uued.length === 1 ? ' auhind.' : ' auhinda.'); }
 function kuuVoti_(y, m) { return y + '-' + (m < 10 ? '0' : '') + m; }
 function piletit_(p) { return p + (p === 1 ? ' pilet' : ' piletit'); }
 
@@ -2557,7 +2620,9 @@ function piletit_(p) { return p + (p === 1 ? ' pilet' : ' piletit'); }
 // Rohkem pileteid = suurem võimalus võita. Auhinna väärtus võimalust ei mõjuta: auhinnad jagatakse võitjatele juhuslikult.
 // Loosis on ainult need, kellel on vähemalt 1 pilet (reeglid 5.5). Korraldaja (KLOON) ja „Endine osaleja“ ei osale.
 // Üks inimene võidab kuus ühe auhinna. Kui sama kuu loos on juba tehtud, loositakse ainult juurde lisatud auhinnad.
-function loosi_(plan) {
+function loosi_(plan, valik) {
+  valik = valik || {};
+  var proov = !!valik.proov, eel = proov ? 'PROOV, midagi ei salvestatud. ' : '';
   var pub = avalik_();
   if (!pub) return { tekst: 'Ühist tabelit veel pole. Vali „Kuu harjutus → Seadista“.' };
   KUUD_ = null;
@@ -2567,7 +2632,14 @@ function loosi_(plan) {
   var kn = ymd_(m.start)[1] - 1, kuus = ET_G[kn] + 's', Kuu = ET_G[kn].charAt(0).toUpperCase() + ET_G[kn].slice(1);
   var auh = auhinnaLoend_(plan);
   if (!auh.length) return { tekst: 'Auhindu pole kirjas. Kirjuta need sellel vahekaardil tabelisse „Auhinnad“ (tulbad V–X) ja tee siis linnuke uuesti.' };
-  var voti = kuuVoti_(k[0], k[1]), olek = loosOlek_();
+  if (!proov) {
+    try { loosiLeht_(pub, plan); } catch (err) { Logger.log('Loosi vahekaart: ' + err); }
+    var vl = varuloos_(pub);
+    if (vl) return vl;
+  } else if (pub.getSheetByName(T_LOOS) && Number(pub.getSheetByName(T_LOOS).getRange('B3').getValue()) > 0) {
+    return { tekst: eel + 'Vahekaardil „Loos | Draw“ on varuloosi number, seega tegelik loos võtab varuloosi tulemuse.' };
+  }
+  var voti = kuuVoti_(k[0], k[1]), olek = loosOlek_(pub);
   if (!olek || olek.kuu !== voti) olek = { kuu: voti, aeg: '', voitjad: [] };
   var f = pub.getSheetByName(T_FAME), rida = -1, varem = olek.voitjad.map(function (w) { return w.nimi; });
   if (f) {
@@ -2582,7 +2654,7 @@ function loosi_(plan) {
   var loetelu = function (ws) {
     return ws.map(function (w, i) { return (i + 1) + '. ' + w.nimi + ' (' + piletit_(w.p) + ') – ' + w.et; }).join('; ');
   };
-  if (!jaak.length) return { tekst: Kuu + ' auhinnad on juba loositud (' + olek.aeg + '): ' + loetelu(jarjestaVoitjad_(olek.voitjad, auh)) +
+  if (!jaak.length) return { tekst: eel + Kuu + ' auhinnad on juba loositud (' + olek.aeg + '): ' + loetelu(jarjestaVoitjad_(olek.voitjad, auh)) +
     '. Kui lisad tabelisse „Auhinnad“ uusi auhindu, loosib linnuke ainult need juurde.' };
   var kloon = KLOON.toLowerCase();
   var nimed = m.sh.getRange(R0, 1, N, 1).getValues(), pil = m.sh.getRange(R0, PILETID, N, 1).getValues();
@@ -2592,7 +2664,9 @@ function loosi_(plan) {
     if (!nimi || p <= 0 || nimi === EKS || nimi.toLowerCase() === kloon || varem.indexOf(nimi) >= 0) return;
     loos.push([nimi, p]); kokku += p;
   });
-  if (!kokku) return { tekst: 'Loosis pole kedagi: ' + kuus + ' pole veel ühtegi piletit' + (varem.length ? ' (varem võitsid ' + varem.join(', ') + ')' : '') + '.' };
+  if (!kokku && olek.voitjad.length) return { tekst: eel + Kuu + ' auhinnad on juba loositud (' + olek.aeg + '): ' + loetelu(jarjestaVoitjad_(olek.voitjad, auh)) +
+    '. Rohkem piletiga osalejaid pole, seega ' + jaak.length + (jaak.length === 1 ? ' auhind jääb' : ' auhinda jääb') + ' loosimata.' };
+  if (!kokku) return { tekst: eel + 'Loosis pole kedagi: ' + kuus + ' pole veel ühtegi piletit' + (varem.length ? ' (varem võitsid ' + varem.join(', ') + ')' : '') + '.' };
   for (var s = jaak.length - 1; s > 0; s--) { var r_ = Math.floor(Math.random() * (s + 1)), tmp = jaak[s]; jaak[s] = jaak[r_]; jaak[r_] = tmp; }
   var uued = [];
   while (uued.length < jaak.length && loos.length) {
@@ -2602,8 +2676,14 @@ function loosi_(plan) {
     uued.push({ nimi: loos[v][0], p: loos[v][1], et: pr.et, en: pr.en });
     kokku -= loos[v][1]; loos.splice(v, 1);
   }
+  if (proov) return { tekst: eel + 'Loos töötab: ' + loosis_(loos.length + uued.length, uued) + ' Näiteks võidaksid: ' + loetelu(jarjestaVoitjad_(uued, auh)) + '.' };
+  if (valik.kontroll) {                                              // teine mehhanism jõudis vahepeal ette: tema tulemus jääb
+    var veel = loosiKirje_(pub);
+    if (veel && veel.kuu === voti && veel.voitjad.length > olek.voitjad.length) return { tekst: Kuu + ' auhinnad on juba loositud (' + veel.aeg + '): ' + loetelu(jarjestaVoitjad_(veel.voitjad, auh)) + '.' };
+  }
   olek.voitjad = olek.voitjad.concat(uued);
   olek.aeg = Utilities.formatDate(new Date(), TZ, 'd.MM.yyyy');
+  loosiKirjuta_(pub, { kuu: olek.kuu, aeg: olek.aeg, voitjad: jarjestaVoitjad_(olek.voitjad, auh) }, valik.viis || 'linnuke D32');
   props_().setProperty('LOOS', JSON.stringify(olek));
   if (rida > 0) {
     var koik = varem.slice();
@@ -2637,7 +2717,7 @@ var VV0 = 20, VV_VEERG = 7, VV_MAX = 100, VV_TULBAD = [7, 8, 9, 10, 12];
 function voitjadVaade_(pub, alati) {
   var b = pub.getSheetByName(T_BOARD);
   if (!b) return false;
-  var olek = loosOlek_(), y, mm;
+  var olek = loosOlek_(pub), y, mm;
   if (olek) { y = Number(olek.kuu.slice(0, 4)); mm = Number(olek.kuu.slice(5)); }
   else {
     var d = ymd_(tana_()), k = eelmine_(d[0], d[1]), j = d[1] === 12 ? [d[0] + 1, 1] : [d[0], d[1] + 1];
@@ -2705,6 +2785,168 @@ function tiimid_(pub, y, mm) {
     if (nimi && t && !/^(OTSIN|LOOKING)$/i.test(t)) out[nimi] = t;
   });
   return out;
+}
+
+
+// Erik 4.11: „peab olema 3x erinevat mehanismi … loos peab toimuma kohe, 10 sek jooksul max“. Loosi tulemus elab nüüd ühise tabeli
+// vahekaardil „Loos | Draw“ (mitte ainult skripti mälus), nii et kõik mehhanismid näevad sama tulemust ja teist loosi ei tule:
+//   1) linnuke D32 (see skript), 2) veebilehe nupp (see skript, ilma päästikuta), 3) eraldi projekt „Loosiratas“ (oma kood, loosiratas.gs),
+//   4) varuloos ilma skriptita: Erik kirjutab lahtrisse B3 numbri ja valemid loosivad kohe (sama reegel: piletid kaaluvad, auhind juhuslik,
+//      Erik ja piletita ei osale, üks auhind inimese kohta). Skript kannab varuloosi tulemuse hiljem ise Ülevaatesse ja Autahvlile.
+// Salvestatud tulemus: H6:N105 (H kuu kujul 202610, I nr, J nimi, K piletid, L auhind, M prize, N „aeg · viis“ esimesel real). Peidetud abitulbad H–Z.
+// Esimene salvestatud tulemus võidab alati: iga mehhanism vaatab enne loosi, kas selle kuu tulemus (või varuloos) on juba olemas.
+var T_LOOS = 'Loos | Draw', LS0 = 6, LSN = 100, LSV = 30, LOOS_LEHT_VER = 'L4';
+var LS_ET = ET_M.map(function (x) { return '"' + x + '"'; }).join(','), LS_EN = EN_S.map(function (x) { return '"' + x + '"'; }).join(',');
+function loosiValemid_() {
+  var kuu = function (nimi) {
+    return 'IF(AND(INDIRECT("\'"&' + nimi + '&"\'!AW1")="KUULEHT",YEAR(INDIRECT("\'"&' + nimi + '&"\'!AW2"))*100+MONTH(INDIRECT("\'"&' + nimi + '&"\'!AW2"))=$H$2),' + nimi + ',NA())';
+  };
+  var v = {
+    H2: '=YEAR(EDATE(TODAY(),-1))*100+MONTH(EDATE(TODAY(),-1))',
+    I2: '=CHOOSE(MOD($H$2,100),' + LS_ET + ')&" "&INT($H$2/100)&" | "&CHOOSE(MOD($H$2,100),' + LS_EN + ')&" "&INT($H$2/100)',
+    J2: '=CHOOSE(MOD($H$2,100),' + LS_ET + ')&" | "&CHOOSE(MOD($H$2,100),' + LS_EN + ')',
+    B2: '=IFERROR(' + kuu('$K$2') + ',IFERROR(' + kuu('$I$2') + ',IFERROR(' + kuu('$J$2') + ',"")))',
+    H3: '=SUMPRODUCT(--(LEN($T$6:$T$105)>0))',
+    A4: '=IF(N($B$3)<0,"PROOV (miinusega number): nii loosiksid valemid praegu. Midagi ei salvestata, kustuta number pärast proovi. Öösel kustutab skript selle ise.",IF($H$6=$H$2,"✓ Loos on tehtud: "&$N$6&". Võitjad on all ning vahekaartidel „Ülevaade“ ja „Autahvel“.",IF($B$2="","Loositava kuu vahekaarti ei leitud.",' +
+        'IF(ISNUMBER($B$3),"Varuloosi tulemus. Skript kannab selle ise vahekaartidele „Ülevaade“ ja „Autahvel“.","Loosimata. Loosis on "&COUNTIF($W$6:$W$105,TRUE)&" inimest, kokku "&SUMPRODUCT(($W$6:$W$105)*($R$6:$R$105))&" piletit."))))'
+  };
+  var nimi = 'INDEX($Q$6:$Q$105,MATCH(LARGE($S$6:$S$105,ROW()-5),$S$6:$S$105,0))';
+  var auh = function (c) { return 'INDEX($' + c + '$6:$' + c + '$105,MATCH(LARGE($V$6:$V$105,ROW()-5),$V$6:$V$105,0))'; };
+  v.naita = ['=IF(B6="","",ROW()-5)',
+    '=IF(AND($H$6=$H$2,NOT(N($B$3)<0)),J6&"",IF(OR(NOT(ISNUMBER($B$3)),ROW()-5>$H$3),"",IFERROR(IF(LARGE($S$6:$S$105,ROW()-5)<0,"",' + nimi + '),"")))',
+    '=IF(B6="","",IF(AND($H$6=$H$2,NOT(N($B$3)<0)),K6,IFERROR(INDEX($R$6:$R$105,MATCH(B6,$Q$6:$Q$105,0)),"")))',
+    '=IF(B6="","",IF(AND($H$6=$H$2,NOT(N($B$3)<0)),L6,IFERROR(' + auh('T') + ',"")))',
+    '=IF(B6="","",IF(AND($H$6=$H$2,NOT(N($B$3)<0)),M6,IFERROR(' + auh('U') + ',"")))'];
+  v.abi = ['=IF($B$2="","",IFERROR(TRIM(INDIRECT("\'"&$B$2&"\'!A"&(ROW()-1))&""),""))',               // Q nimi
+    '=IF($B$2="",0,IFERROR(INT(N(INDIRECT("\'"&$B$2&"\'!AN"&(ROW()-1)))),0))',                             // R piletid
+    '=IF(AND(W6,ISNUMBER($B$3)),POWER(MOD(ABS(SIN(ABS($B$3)*129898/10000+ROW()*78233/1000))*437585453/10000,1)*999998/1000000+1/1000000,1/R6)+ROW()/1000000000000,-1)'];   // S võti
+  v.auhv = '=IF(T6="",-1,MOD(ABS(SIN(ABS(N($B$3))*393468/10000+ROW()*11135/1000))*246346345/10000,1)+ROW()/1000000000000)';   // V
+  v.sees = '=AND(Q6<>"",R6>=1,Q6<>"' + EKS + '",LOWER(Q6)<>"' + KLOON.toLowerCase() + '")';                // W
+  return v;
+}
+
+// Teeb/uuendab vahekaardi „Loos | Draw“: valemid (kord iga versiooni kohta), auhindade tükid plaanist, loositava kuu nimi.
+// Salvestatud tulemust (H:N) ja varuloosi numbrit (B3) ei puutu.
+function loosiLeht_(pub, plan) {
+  var sh = pub.getSheetByName(T_LOOS), uus = !sh;
+  if (uus) sh = pub.insertSheet(T_LOOS, pub.getSheets().length);
+  if (sh.getMaxColumns() < 26) sh.insertColumnsAfter(sh.getMaxColumns(), 26 - sh.getMaxColumns());
+  if (sh.getMaxRows() < LS0 + LSN) sh.insertRowsAfter(sh.getMaxRows(), LS0 + LSN - sh.getMaxRows());
+  if (str_(sh.getRange('Z1').getValue()) !== LOOS_LEHT_VER) {
+    var v = loosiValemid_(), rida = function (a) { var o = []; for (var i = 0; i < a; i++) o.push(i); return o; };
+    sh.getRange('A1:E5').breakApart();
+    sh.getRange('A1:F5').clearContent();
+    sh.getRange('A1:E1').merge();
+    sh.getRange('A1').setValue('LOOS | DRAW').setFontFamily('Oswald').setFontSize(16).setFontWeight('bold').setFontColor('#2B241E');
+    sh.getRange('A2').setValue('Loositav kuu | Month');
+    sh.getRange('A3').setValue('Varuloos | Backup draw');
+    sh.getRange('A2:A3').setFontWeight('bold').setFontSize(10).setFontColor('#6E655B');
+    sh.getRange('B2').setFormula(v.B2).setFontWeight('bold');
+    sh.getRange('B3').setBackground('#FFF4D6').setHorizontalAlignment('center').setFontWeight('bold').setFontSize(14)
+      .setDataValidation(SpreadsheetApp.newDataValidation().requireNumberBetween(-999999, 999999).setAllowInvalid(false)
+        .setHelpText('Loos: suvaline number 1–999999, võitjad tulevad kohe alla. Proov: miinusega number (näiteks -7), midagi ei salvestata.').build());
+    sh.getRange('C3:E3').merge();
+    sh.getRange('C3').setValue('Ainult Erikule, kui linnuke D32, veebileht ja Loosiratas kõik ei tööta: kirjuta lahtrisse B3 suvaline number (näiteks 7). ' +
+      'Võitjad tulevad kohe alla, skripti pole vaja. Skript kannab nad hiljem ise vahekaartidele „Ülevaade“ ja „Autahvel“. ' +
+      'Proovimiseks kirjuta miinusega number (näiteks -7): siis näed, kuidas valemid loosiksid, aga midagi ei salvestata.')
+      .setFontSize(9).setFontStyle('italic').setFontColor('#6E655B').setWrap(true).setVerticalAlignment('middle');
+    sh.getRange('A4:E4').merge();
+    sh.getRange('A4').setFormula(v.A4).setFontSize(10).setFontColor('#2B241E').setWrap(true);
+    sh.getRange('H2:J2').setFormulas([[v.H2, v.I2, v.J2]]);
+    sh.getRange('H3').setFormula(v.H3);
+    sh.getRange('A5:E5').setValues([['NR', 'NIMI | NAME', 'LOOSIPILETITE ARV | TICKETS', 'AUHIND', 'PRIZE']])
+      .setBackground('#2B241E').setFontColor('#FFFFFF').setFontSize(8).setFontWeight('bold').setHorizontalAlignment('center').setVerticalAlignment('middle').setWrap(true);
+    sh.getRange('H5:N5').setValues([['kuu', 'nr', 'nimi', 'piletid', 'auhind', 'prize', 'aeg / viis']]);
+    sh.getRange('Q5:W5').setValues([['nimi', 'piletid', 'võti', 'auhind', 'prize', 'auhinna võti', 'loosis']]);
+    sh.getRange(LS0, 1, LSV, 5).setFormulas(rida(LSV).map(function (i) { return v.naita.map(function (f) { return f.replace(/([A-Z])6(?![0-9])/g, '$1' + (LS0 + i)); }); }));
+    sh.getRange(LS0, 1, LSV, 5).setFontSize(11).setVerticalAlignment('middle')
+      .setBackgrounds(rida(LSV).map(function (i) { var c = i % 2 ? '#F6F1EA' : '#FFFFFF'; return [c, c, c, c, c]; }));
+    sh.getRange(LS0, 1, LSV, 1).setHorizontalAlignment('center').setFontWeight('bold').setFontColor('#8B6B47');
+    sh.getRange(LS0, 2, LSV, 1).setFontWeight('bold');
+    sh.getRange(LS0, 3, LSV, 1).setHorizontalAlignment('center');
+    var ab = rida(LSN).map(function (i) { return v.abi.map(function (f) { return f.replace(/([A-Z])6(?![0-9])/g, '$1' + (LS0 + i)); }); });
+    sh.getRange(LS0, 17, LSN, 3).setFormulas(ab);
+    sh.getRange(LS0, 22, LSN, 2).setFormulas(rida(LSN).map(function (i) { var r = LS0 + i; return [v.auhv.replace(/T6/g, 'T' + r), v.sees.replace(/([QR])6/g, '$1' + r)]; }));
+    sh.setColumnWidth(1, 40); sh.setColumnWidth(2, 170); sh.setColumnWidth(3, 110); sh.setColumnWidth(4, 200); sh.setColumnWidth(5, 180);
+    sh.setRowHeight(3, 48); sh.setRowHeight(4, 34);
+    sh.getRange('Z1').setValue(LOOS_LEHT_VER);
+    sh.hideColumns(7, 20);                                   // G–Z: salvestatud tulemus ja abitulbad
+    kaitse_(sh, []);                                         // ainult omanik (Erik ja skript) saab muuta
+  }
+  var b3 = sh.getRange('B3');
+  if (typeof b3.getValue() === 'number' && b3.getValue() < 0 && Utilities.formatDate(new Date(), TZ, 'HH') < '06') b3.setValue('');   // unustatud proov öösel ära
+  var olek = null;
+  if (!Number(sh.getRange(LS0, 8).getValue())) {             // vana loos (enne 4.11) oli ainult skripti mälus: kanna üle
+    try { olek = JSON.parse(props_().getProperty('LOOS') || 'null'); } catch (err) { olek = null; }
+    if (olek && olek.kuu && olek.voitjad && olek.voitjad.length) loosiKirjuta_(pub, olek, 'linnuke', true);
+  }
+  if (plan) {                                                // auhinnad tükkidena (5 × 5€ = 5 rida), tabeli järjekorras
+    var tk = [];
+    auhinnaLoend_(plan).forEach(function (a) { for (var j = 0; j < a.n && tk.length < LSN; j++) tk.push([txt_(a.et), txt_(a.en)]); });
+    while (tk.length < LSN) tk.push(['', '']);
+    var ala = sh.getRange(LS0, 20, LSN, 2);
+    if (JSON.stringify(ala.getValues().map(function (r) { return [str_(r[0]), str_(r[1])]; })) !== JSON.stringify(tk.map(function (r) { return [str_(r[0]), str_(r[1])]; }))) ala.setValues(tk);
+  }
+  var d = ymd_(tana_()), k = eelmine_(d[0], d[1]), m = kuuLeht_(pub, k[0], k[1]);   // täpne vahekaardi nimi (valem leiab ka ise)
+  var kv = [[m ? m.name : '', m ? k[0] * 100 + k[1] : '']], k2 = sh.getRange('K2:L2');
+  if (JSON.stringify(k2.getValues()) !== JSON.stringify(kv)) k2.setValues(kv);
+  return sh;
+}
+
+// Salvestatud tulemus vahekaardilt: { kuu: '2026-10', aeg, viis, voitjad: [{ nimi, p, et, en }] } või null.
+function loosiKirje_(pub) {
+  var sh = pub && pub.getSheetByName(T_LOOS);
+  if (!sh || sh.getMaxColumns() < 14) return null;
+  var v = sh.getRange(LS0, 8, LSN, 7).getValues(), k = Math.floor(Number(v[0][0]) || 0);
+  if (k < 200001) return null;
+  var av = str_(v[0][6]).split(' · ');
+  return { kuu: kuuVoti_(Math.floor(k / 100), k % 100), aeg: (av[0] || '').split(' ')[0], viis: av[1] || '',
+    voitjad: v.filter(function (r) { return str_(r[2]); }).map(function (r) { return { nimi: str_(r[2]), p: Math.floor(Number(r[3]) || 0), et: str_(r[4]), en: str_(r[5]) || str_(r[4]) }; }) };
+}
+function loosiKirjuta_(pub, olek, viis, vanaAeg) {
+  var sh = pub.getSheetByName(T_LOOS) || loosiLeht_(pub, null);
+  var k = Number(olek.kuu.slice(0, 4)) * 100 + Number(olek.kuu.slice(5)), aeg = vanaAeg ? olek.aeg : Utilities.formatDate(new Date(), TZ, 'd.MM.yyyy HH:mm');
+  var read = olek.voitjad.slice(0, LSN).map(function (w, i) { return [k, i + 1, txt_(w.nimi), w.p, txt_(w.et), txt_(w.en || w.et), i ? '' : aeg + ' · ' + viis]; });
+  while (read.length < LSN) read.push(['', '', '', '', '', '', '']);
+  sh.getRange(LS0, 8, LSN, 7).setValues(read);
+  if (sh.getRange('B3').getValue() !== '') sh.getRange('B3').setValue('');   // varuloosi number pole enam vaja
+}
+
+// Varuloos (number lahtris B3, valemid loosisid): kui selle kuu tulemust veel salvestatud pole, salvestab valemite tulemuse,
+// kirjutab võitjad Autahvlile ja Ülevaatesse. Tagastab { tekst } või null, kui varuloosi pole.
+function varuloos_(pub) {
+  var sh = pub.getSheetByName(T_LOOS);
+  if (!sh) return null;
+  var p = sh.getRange('A2:N3').getValues(), seemne = p[1][1];
+  if (typeof seemne !== 'number' || !(seemne > 0)) return null;
+  var d = ymd_(tana_()), k = eelmine_(d[0], d[1]), voti = k[0] * 100 + k[1];
+  if (Number(sh.getRange(LS0, 8).getValue()) === voti) return null;
+  if (Number(p[0][7]) !== voti) return null;                  // valemite kuu ei klapi (TODAY), ei julge
+  var ws = sh.getRange(LS0, 1, LSV, 5).getValues().filter(function (r) { return str_(r[1]); })
+    .map(function (r) { return { nimi: str_(r[1]), p: Math.floor(Number(r[2]) || 0), et: str_(r[3]), en: str_(r[4]) || str_(r[3]) }; });
+  if (!ws.length) return null;
+  var olek = { kuu: kuuVoti_(k[0], k[1]), aeg: Utilities.formatDate(new Date(), TZ, 'd.MM.yyyy'), voitjad: ws };
+  loosiKirjuta_(pub, olek, 'varuloos');
+  props_().setProperty('LOOS', JSON.stringify(olek));
+  var m = kuuLeht_(pub, k[0], k[1]);
+  if (m) autahvliVoitjad_(pub, m.name, ws.map(function (w) { return w.nimi; }), false);
+  voitjadVaade_(pub, true);
+  var Kuu = ET_G[k[1] - 1].charAt(0).toUpperCase() + ET_G[k[1] - 1].slice(1);
+  return { tekst: Kuu + ' loos tehti varuloosiga (vahekaart „Loos | Draw“, number ' + seemne + '): ' +
+    ws.map(function (w, i) { return (i + 1) + '. ' + w.nimi + ' (' + piletit_(w.p) + ') – ' + w.et; }).join('; ') + '. Võitjad on nüüd ka vahekaartidel „Ülevaade“ ja „Autahvel“.' };
+}
+
+// Autahvli kuu reale (tulp J) võitjate nimed: lisa = true lisab olemasolevatele.
+function autahvliVoitjad_(pub, kuuNimi, nimed, lisa) {
+  var f = pub.getSheetByName(T_FAME);
+  if (!f) return;
+  var a = f.getRange(FAME0, 1, FAMEN, 1).getValues();
+  for (var i = 0; i < FAMEN; i++) if (String(a[i][0]) === kuuNimi) {
+    var c = f.getRange(FAME0 + i, FAME_WIN), koik = lisa ? str_(c.getValue()).split(/\s*[,\n]\s*/).filter(String) : [];
+    nimed.forEach(function (x) { if (koik.indexOf(x) < 0) koik.push(x); });
+    c.setValue(koik.join('\n')); autahvliKorgus_(f);
+    return;
+  }
 }
 
 
@@ -3139,10 +3381,16 @@ var AUTO_JOOKS = false;                                     // true, kui Seadist
 
 // Kiire kontroll iga päästiku alguses. Ei viska kunagi viga.
 function versioon(kiire) {
-  if (kiire) try { paastikudKorda(); } catch (err) { Logger.log('Päästikud: ' + (err && err.message ? err.message : err)); }
+  // Erik 4.11: iga minut tehtud päästikute kontroll (avab privaatse tabeli ja loeb kõik vahekaardid) kulutas Gmaili konto
+  // päästikute päevalimiidi (90 min) hommikuks ära ja siis ei käivitunud ükski päästik. Nüüd kord tunnis; Seadista ja öö teevad ka.
+  if (kiire) try {
+    var pk = PropertiesService.getScriptProperties(), pv = Number(pk.getProperty('PAASTIKUD_AEG')) || 0;
+    if (Date.now() - pv >= 60 * 60 * 1000) { pk.setProperty('PAASTIKUD_AEG', String(Date.now())); paastikudKorda(); }
+  } catch (err) { Logger.log('Päästikud: ' + (err && err.message ? err.message : err)); }
   if (kiire) try { linnukesed_(); } catch (err) { Logger.log('Linnukesed: ' + (err && err.message ? err.message : err)); }
   try {
     var p = PropertiesService.getScriptProperties();
+    if (kiire && Date.now() - (Number(p.getProperty('KLOON_OOTEL')) || Date.now()) > 3 * 60 * 1000) kloonOotel();   // ühekordne päästik kadus
     if (!p.getProperty('PRIV_ID') || p.getProperty('SEADISTATUD') === EHITUS) return;
     // Kiire osa tehakse minutipäästikust kord iga uue koodi kohta, ka siis, kui osaleja muudatus märkas koodi enne (2.11: muidu jäi see vahele).
     var vajaKiire = kiire && p.getProperty('KIIRE_TEHTUD') !== EHITUS;
@@ -3178,6 +3426,7 @@ function kiire_() {
         lisaVorming_(pub);                                   // enne muud, et üks ebaõnnestunud samm seda ei takistaks
         topeltElus_(g);
         try { vanadKuud_(pub); } catch (e) { Logger.log('Vana kuu: ' + e.message); }
+        try { loosiLeht_(pub, g); } catch (e) { Logger.log('Loosi vahekaart: ' + e.message); }
       });
     } catch (err) { Logger.log('Kiire uuendus: ' + (err && err.message ? err.message : err)); }
   });
@@ -3219,7 +3468,7 @@ function autoSeadista() {
 return {
   versioon: versioon, autoSeadista: autoSeadista, paastikudKorda: paastikudKorda, veeb: veeb, veebiLoos: veebiLoos,
   menuu: menuu, seadista: seadista, naitaLinki: naitaLinki, looUusKuuleht: looUusKuuleht, uuendaEelvaade: uuendaEelvaade,
-  saadaProov: saadaProov, lisaGrupp: lisaGrupp, aktiivsele: aktiivsele_, oine: oine, hommik: hommik, muudatus: muudatus, plaaniMuudatus: plaaniMuudatus, loosiMenuust: loosiMenuust, ylevaade: ylevaade, nimekiri: nimekiri,
+  saadaProov: saadaProov, lisaGrupp: lisaGrupp, aktiivsele: aktiivsele_, oine: oine, hommik: hommik, muudatus: muudatus, plaaniMuudatus: plaaniMuudatus, loosiMenuust: loosiMenuust, ylevaade: ylevaade, nimekiri: nimekiri, kloonOotel: kloonOotel,
   _: function (x) { return eval(x); }                       // ainult testimiseks
 };
 })();
@@ -3237,10 +3486,11 @@ function kuuHarjutusHommik() { KuuHarjutus.versioon(); KuuHarjutus.hommik(); }
 function kuuHarjutusMuudatus(e) { KuuHarjutus.versioon(); KuuHarjutus.muudatus(e); }
 function kuuHarjutusPlaan(e) { KuuHarjutus.versioon(); KuuHarjutus.plaaniMuudatus(e); }
 function doGet() { return KuuHarjutus.veeb(); }                   // veebileht loosiks telefonis (Erik 4.11)
-function kuuHarjutusVeebiLoos(g) { return KuuHarjutus.veebiLoos(g); }
+function kuuHarjutusVeebiLoos(g, proov) { return KuuHarjutus.veebiLoos(g, proov); }
 function kuuHarjutusLoos() { KuuHarjutus.aktiivsele(KuuHarjutus.loosiMenuust); }
 function kuuHarjutusYlevaade() { KuuHarjutus.ylevaade(); }
 function kuuHarjutusNimekiri() { KuuHarjutus.nimekiri(); }
+function kuuHarjutusKloon() { KuuHarjutus.kloonOotel(); }
 function kuuHarjutusVersioon() { KuuHarjutus.versioon(true); }
 function kuuHarjutusPaastikud() { return KuuHarjutus.paastikudKorda(); }   // „Arhiiv & tähtajad“ öine käivitus kutsub seda (Erik 2.11)
 function kuuHarjutusAutoSeadista() { KuuHarjutus.autoSeadista(); }
@@ -3925,7 +4175,7 @@ null
 "DCE1E8": "E6DED3"
 }
 };
-var EHITUS = '7cf52da54277';
+var EHITUS = 'b6766a020011';
 var KH_XLSX = [
   "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",
