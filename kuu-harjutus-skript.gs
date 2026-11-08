@@ -2627,7 +2627,7 @@ function linnukesed_() {
   var nyyd = Utilities.formatDate(new Date(), TZ, 'd HH').split(' ').map(Number);
   if (nyyd[0] > 10 || nyyd[1] < 7 || nyyd[1] >= 23) return;
   grupid_(privaatne_()).forEach(function (g) {
-    if (!g) return;
+    if (!g || !minutAegaOn_()) return;                         // aeg otsas: järgmine minut jätkab (NUPP: võtmed jäävad alles)
     grupiga_(g, function () {
       var p = props_(), v = g.getRange(C_LOOS + ':' + C_PROOV).getValues();
       [C_LOOS, C_KUU, C_PROOV].forEach(function (a1, i) {
@@ -2635,7 +2635,7 @@ function linnukesed_() {
         if (v[i][0] !== true) { if (p.getProperty(k)) p.deleteProperty(k); return; }
         var nagi = Number(p.getProperty(k)) || 0, kaib = Number(p.getProperty('NUPP_KAIB:' + a1)) || 0;
         if (!nagi) { p.setProperty(k, String(nyyd)); return; }
-        if (nyyd - nagi < 50000 || nyyd - kaib < 300000) return;
+        if (nyyd - nagi < 50000 || nyyd - kaib < 300000 || !minutAegaOn_()) return;
         p.deleteProperty(k);
         plaaniMuudatus1_({ range: g.getRange(a1) }, g);
       });
@@ -3320,14 +3320,14 @@ function avalik_() {
   }
   if (!id) return null;
   try {
-    if (DriveApp.getFileById(id).isTrashed()) return null;
-    return SpreadsheetApp.openById(id);
+    if (korda_(function () { return DriveApp.getFileById(id).isTrashed(); })) return null;
+    return korda_(function () { return SpreadsheetApp.openById(id); });
   } catch (err) { return null; }
 }
 
 function privaatne_() {
   var id = props_().getProperty('PRIV_ID');
-  return id ? SpreadsheetApp.openById(id) : SpreadsheetApp.getActive();
+  return id ? korda_(function () { return SpreadsheetApp.openById(id); }) : SpreadsheetApp.getActive();
 }
 
 function plaan_(priv) {
@@ -3577,16 +3577,47 @@ function html_(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;'
 var AUTO_MAX = 6, AUTO_PAASTIK = 'kuuHarjutusAutoSeadista';
 var AUTO_JOOKS = false;                                     // true, kui Seadista käivitas autoSeadista (mitte Erik)
 
+// Erik 8.11: minutipäästik ületas 7.11 korra 6 minuti piiri ja sai kaks korda Google'i serveri vea (iga kord pärast mitut minutit
+// ootamist). Tavaliselt kestab ta 4–30 sekundit. Nüüd: (1) kui eelmine minutikäivitus veel käib või Seadista käib, jäävad rasked
+// sammud (linnukesed, päästikute kontroll) sel minutil vahele, et käivitused ei kuhjuks samale tabelile; (2) linnukesed ja kiire
+// uuendus lõpetavad 4 minuti järel ja ülejäänu tehakse järgmisel minutil; (3) tabeli avamine proovib ajutise serveri vea korral uuesti.
+var MINUT_PIIR = 4 * 60 * 1000, MINUT_ALGUS = 0;            // MINUT_ALGUS = 0: mitte minutipäästik, piirangut pole
+function minutAegaOn_() { return !MINUT_ALGUS || Date.now() - MINUT_ALGUS < MINUT_PIIR; }
+function ajutine_(err) {
+  return /server error|Service (Spreadsheets|unavailable|error)|timed out|try again|Internal error|Backend error/i.test(String(err && err.message ? err.message : err));
+}
+// Käivitab fn; ajutise Google'i vea korral proovib veel kaks korda (1,5 s ja 4 s pausiga), kui aega on.
+function korda_(fn) {
+  for (var i = 0; ; i++) {
+    try { return fn(); } catch (err) {
+      if (i >= 2 || !ajutine_(err) || !minutAegaOn_()) throw err;
+      Utilities.sleep(i ? 4000 : 1500);
+    }
+  }
+}
+
 // Kiire kontroll iga päästiku alguses. Ei viska kunagi viga.
 function versioon(kiire, e) {
+  var p0 = PropertiesService.getScriptProperties(), raske = true;
+  if (kiire) {
+    MINUT_ALGUS = Date.now();
+    var eelmine = Number(p0.getProperty('MINUT_KAIB')) || 0, sk = Number(p0.getProperty('SEADISTA_KAIB')) || 0;
+    raske = !(eelmine && MINUT_ALGUS - eelmine < 6 * 60 * 1000) && !(sk && MINUT_ALGUS - sk < 7 * 60 * 1000);
+    if (raske) p0.setProperty('MINUT_KAIB', String(MINUT_ALGUS));
+    else Logger.log('Eelmine minutikäivitus või Seadista käib veel: linnukesed ja päästikute kontroll jäävad sel minutil vahele.');
+  }
+  try { versioon1_(kiire, e, raske); }
+  finally { if (kiire && raske) try { p0.deleteProperty('MINUT_KAIB'); } catch (err) {} }
+}
+function versioon1_(kiire, e, raske) {
   try { elusta_(kiire, e); } catch (err) { Logger.log('Elustamine: ' + (err && err.message ? err.message : err)); }
   // Erik 4.11: iga minut tehtud päästikute kontroll (avab privaatse tabeli ja loeb kõik vahekaardid) kulutas Gmaili konto
   // päästikute päevalimiidi (90 min) hommikuks ära ja siis ei käivitunud ükski päästik. Nüüd kord tunnis; Seadista ja öö teevad ka.
-  if (kiire) try {
+  if (kiire && raske) try {
     var pk = PropertiesService.getScriptProperties(), pv = Number(pk.getProperty('PAASTIKUD_AEG')) || 0;
     if (Date.now() - pv >= 60 * 60 * 1000) { pk.setProperty('PAASTIKUD_AEG', String(Date.now())); paastikudKorda(); }
   } catch (err) { Logger.log('Päästikud: ' + (err && err.message ? err.message : err)); }
-  if (kiire) try { linnukesed_(); } catch (err) { Logger.log('Linnukesed: ' + (err && err.message ? err.message : err)); }
+  if (kiire && raske) try { linnukesed_(); } catch (err) { Logger.log('Linnukesed: ' + (err && err.message ? err.message : err)); }
   try {
     var p = PropertiesService.getScriptProperties();
     if (kiire && Date.now() - (Number(p.getProperty('KLOON_OOTEL')) || Date.now()) > 3 * 60 * 1000) kloonOotel();   // ühekordne päästik kadus
@@ -3611,9 +3642,11 @@ function versioon(kiire, e) {
 // Kohe uue koodi järel (Erik 30.10: 15 minutit on liiga kaua): ainult tekstid ja 2x/eripäevad kõigis gruppides.
 // Täis-Seadista (mall, valemid, kaitsed) tuleb minut hiljem nagu enne.
 function kiire_() {
-  var priv = SpreadsheetApp.openById(PropertiesService.getScriptProperties().getProperty('PRIV_ID'));
+  var priv = korda_(function () { return SpreadsheetApp.openById(PropertiesService.getScriptProperties().getProperty('PRIV_ID')); });
+  var jai = 0;
   grupid_(priv).forEach(function (g) {
     if (!g) return;
+    if (!minutAegaOn_()) { jai++; return; }
     try {
       grupiga_(g, function () {
         KUUD_ = null;
@@ -3631,6 +3664,10 @@ function kiire_() {
     } catch (err) { Logger.log('Kiire uuendus: ' + (err && err.message ? err.message : err)); }
   });
   KUUD_ = null;
+  if (jai) {                                                  // aeg otsas: järgmine minut teeb kiire osa uuesti (kuni Seadista on tehtud)
+    Logger.log('Kiire uuendus: ' + jai + ' grupp(i) jäi ajapuudusel järgmisele minutile.');
+    PropertiesService.getScriptProperties().deleteProperty('KIIRE_TEHTUD');
+  }
 }
 
 function autoJargmine_(ms) {
