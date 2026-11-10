@@ -2459,7 +2459,7 @@ function allikas_(t) { try { return String(t.getTriggerSourceId() || ''); } catc
 function paastikud_(priv, pubIds) {
   var on = ScriptApp.getProjectTriggers(), hoia = [], vead = [], pid = priv.getId();
   var vaja = [
-    { f: 'kuuHarjutusVersioon', loo: function () { ScriptApp.newTrigger('kuuHarjutusVersioon').timeBased().everyMinutes(1).create(); } },   // uuendaja toodud kood seadistab end ise (27.10)
+    { f: 'kuuHarjutusVersioon', loo: function () { ScriptApp.newTrigger('kuuHarjutusVersioon').timeBased().everyMinutes(MINUT_SAMM).create(); } },   // uuendaja toodud kood seadistab end ise (27.10)
     { f: 'kuuHarjutusPlaan', id: pid, loo: function () { ScriptApp.newTrigger('kuuHarjutusPlaan').forSpreadsheet(pid).onEdit().create(); } },
     { f: 'kuuHarjutusMenuu', id: pid, loo: function () { ScriptApp.newTrigger('kuuHarjutusMenuu').forSpreadsheet(pid).onOpen().create(); } },
     { f: 'kuuHarjutusOine', loo: function () { ScriptApp.newTrigger('kuuHarjutusOine').timeBased().everyDays(1).atHour(0).inTimezone(TZ).create(); } },
@@ -2468,6 +2468,15 @@ function paastikud_(priv, pubIds) {
     return { f: 'kuuHarjutusMuudatus', id: id, loo: function () { ScriptApp.newTrigger('kuuHarjutusMuudatus').forSpreadsheet(id).onEdit().create(); } };
   }));
   var lisatud = 0, puudu = [], VANAD = ['oine', 'hommik', 'muudatus'];
+  // Erik 10.11: vana 1-minutiline päästik vahetatakse üks kord MINUT_SAMM-minutilise vastu (Google ei näita päästiku sammu, seega märge mälus).
+  var pp0 = PropertiesService.getScriptProperties();
+  if (pp0.getProperty('MINUT_SAMM') !== String(MINUT_SAMM)) {
+    on = on.filter(function (x) {
+      if (x.getHandlerFunction() !== 'kuuHarjutusVersioon') return true;
+      try { ScriptApp.deleteTrigger(x); } catch (err) {}
+      return false;
+    });
+  }
   // Tabeli päästik, mille tabelit ei saanud lugeda (allikas tühi), loeb samuti olemasolevaks: muidu tehtaks iga kord uus juurde.
   var sobib = function (x, v) { var a = allikas_(x); return x.getHandlerFunction() === v.f && (!v.id || a === v.id || a === ''); };
   vaja.forEach(function (v) {
@@ -2484,7 +2493,8 @@ function paastikud_(priv, pubIds) {
     try { ScriptApp.deleteTrigger(x); } catch (err) {}
   });
   puudu.forEach(function (v) {
-    try { v.loo(); lisatud++; } catch (err) { vead.push(v.f + ': ' + (err && err.message ? err.message : err)); }
+    try { v.loo(); lisatud++; if (v.f === 'kuuHarjutusVersioon') pp0.setProperty('MINUT_SAMM', String(MINUT_SAMM)); }
+    catch (err) { vead.push(v.f + ': ' + (err && err.message ? err.message : err)); }
   });
   var pp = PropertiesService.getScriptProperties();
   if (vead.length) { Logger.log('Päästikud: ' + vead.join(' | ')); pp.setProperty('PAASTIKU_VIGA', Utilities.formatDate(new Date(), TZ, 'd.MM HH:mm') + ' ' + vead.join(' | ')); }
@@ -2523,7 +2533,7 @@ function uusPaastik_(f, id) {
     if (x.getHandlerFunction() === f && (!id || allikas_(x) === id)) { try { ScriptApp.deleteTrigger(x); } catch (err) {} }
   });
   if (id) ScriptApp.newTrigger(f).forSpreadsheet(id).onEdit().create();
-  else ScriptApp.newTrigger(f).timeBased().everyMinutes(1).create();
+  else { ScriptApp.newTrigger(f).timeBased().everyMinutes(MINUT_SAMM).create(); PropertiesService.getScriptProperties().setProperty('MINUT_SAMM', String(MINUT_SAMM)); }
   Logger.log('Päästik ' + f + (id ? ' ' + id : '') + ' tehti uuesti (ei käivitunud).');
 }
 
@@ -3581,6 +3591,12 @@ var AUTO_JOOKS = false;                                     // true, kui Seadist
 // ootamist). Tavaliselt kestab ta 4–30 sekundit. Nüüd: (1) kui eelmine minutikäivitus veel käib või Seadista käib, jäävad rasked
 // sammud (linnukesed, päästikute kontroll) sel minutil vahele, et käivitused ei kuhjuks samale tabelile; (2) linnukesed ja kiire
 // uuendus lõpetavad 4 minuti järel ja ülejäänu tehakse järgmisel minutil; (3) tabeli avamine proovib ajutise serveri vea korral uuesti.
+// Erik 10.11: ka pärast seda tuli „server error“ kirju (9.–10.11 neli korda). Kõik need käivitused seisid täpselt 480 s ja logis ei
+// olnud ühtegi skripti rida; samal nädalal seisis samamoodi 480 s ka uuendaja `uuenda`, mis tavaliselt kestab 1,5 s. See on Google'i
+// poolne kinni jäänud käivitus, mida kood katkestada ega püüda ei saa: iga käivitus on üks võimalus. Seepärast käib päästik nüüd
+// iga MINUT_SAMM minuti järel (1440 asemel 288 käivitust ööpäevas), mis vähendab neid kirju umbes viis korda.
+// Uus kood jõuab tabelitesse ja linnukese varulahendus käivitub nüüd kuni MINUT_SAMM minutiga (enne 1 minut).
+var MINUT_SAMM = 5;
 var MINUT_PIIR = 4 * 60 * 1000, MINUT_ALGUS = 0;            // MINUT_ALGUS = 0: mitte minutipäästik, piirangut pole
 function minutAegaOn_() { return !MINUT_ALGUS || Date.now() - MINUT_ALGUS < MINUT_PIIR; }
 function ajutine_(err) {
