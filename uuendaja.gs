@@ -77,7 +77,10 @@ function uuenda_() {
 
   // Iga minut: üks väike päring. Kui hoidlas pole uut muudatust, rohkem midagi ei tehta.
   var muudatus = lae_('', 'https://api.github.com/repos/yksusstuudio/uksus-skriptid/commits/main', 'application/vnd.github.sha').trim();
-  if (muudatus && omad.getProperty('muudatus') === muudatus) return 'Uut versiooni pole.';
+  if (muudatus && omad.getProperty('muudatus') === muudatus) {
+    if (omad.getProperty('ajutine:üldine')) korras_('üldine');   // GitHub vastas jälle: varasem lühike tõrge on läbi, 24 h arvestus algab otsast
+    return 'Uut versiooni pole.';
+  }
 
   var seaded = JSON.parse(lae_(SEADED));
   var uued = [];                                             // { s: sihtmärk, tekst, rasi }
