@@ -1,6 +1,10 @@
 /*************************************************************************************
- *  ÜKSUS – Arhiiv & tähtajad & TASUD  (v14)
+ *  ÜKSUS – Arhiiv & tähtajad & TASUD  (v15)
  *  -----------------------------------------------------------------------------
+ *  UUS v15: menüü "💶 Pikema aja makse (üksik klient)": klient maksis korraga pikema
+ *  aja eest (nt 2 kuud). Küsib nime (nimekaitsega), päevade arvu (vähemalt 32),
+ *  nihutab kuupäeva edasi ja logib ÜHE makse (summa vaikimisi tavahinnaga, saab muuta).
+ *  Öine käivitus seda nihet teist korda ei logi.
  *  UUS v14: iga trennigrupi (kalisteenika, swed, alfa kolmik, lapsed) lõppu võib
  *  panna kolmanda ploki "Ühekordsed" (pealkiri veerus B, nt pärast "1x nädalas"
  *  nimekirja). See on AINULT nimekiri ühekordsete piletitega püsikülastajatest:
@@ -76,6 +80,7 @@ var CONFIG = {
   },
   monthSnap: 0.12,
   dupGuardDays: 25,            // v12: topeltmaksete kaitse aken (päevades)
+  longPayMinDays: 32,          // v15: "Pikema aja makse" vähemalt nii mitu päeva
   logCols: { date: 10, name: 11, group: 12, amount: 13, type: 14 },
   balance: {
     fileId: "__BILANSS_FAILI_ID__",
@@ -138,6 +143,7 @@ function onOpen() {
     .addItem("🔀 Rühmavahetus", "groupSwitch")
     .addItem("🏖 Suvepaus: nihuta kõik kuupäevad edasi", "summerBreakShift")
     .addItem("🎟 Pikenda tasuta (üksik klient)", "freeExtendClient")
+    .addItem("💶 Pikema aja makse (üksik klient)", "longPeriodPayment")
     .addSeparator()
     .addItem("✉️ Saada meeldetuletused (test)", "runRemindersNow")
     .addSeparator()
@@ -1117,6 +1123,143 @@ function freeExtendClient() {
       "• " + Utilities.formatDate(due, CONFIG.tz, "dd.MM.yy") + " → " +
       Utilities.formatDate(nd, CONFIG.tz, "dd.MM.yy") + " (+" + days + " päeva)\n" +
       "• Makset EI logitud. Meeldetuletus järgib uut kuupäeva.");
+  } finally { lock.releaseLock(); }
+}
+
+/* ===== v15: PIKEMA AJA MAKSE (üksik klient) – klient maksis korraga pikema aja eest
+ *  (nt 2 kuud). Küsib nime (nimekaitsega nagu 🎟 Pikenda tasuta), päevade arvu
+ *  (vähemalt CONFIG.longPayMinDays = 32), nihutab kuupäeva edasi ja logib ÜHE makse.
+ *  Summa vaikimisi tavareegli järgi (täiskuud × 70/45 € + lisapäevad), saab muuta.
+ *  Snapshot uueneb -> öine käivitus EI logi sama nihet teist korda. ===== */
+function longPeriodPayment() {
+  var ui = SpreadsheetApp.getUi();
+  var title = "💶 Pikema aja makse";
+  var sh = SpreadsheetApp.getActive().getActiveSheet();
+  var today = new Date();
+  var minDays = CONFIG.longPayMinDays || 32;
+
+  // 1) küsi nimi
+  var rName = ui.prompt(title + " – klient",
+    "Sisesta kliendi NIMI (täpselt nagu tabelis):", ui.ButtonSet.OK_CANCEL);
+  if (rName.getSelectedButton() !== ui.Button.OK) return;
+  var wanted = String(rName.getResponseText()).trim();
+  if (!wanted) { ui.alert("Nimi puudus."); return; }
+
+  // 2) leia KÕIK selle nimega kliendid grupi-sektsioonides (sama haare nagu Pikenda tasuta)
+  var n = sh.getLastRow();
+  var b = sh.getRange(1, CONFIG.colB, n, 1).getValues();
+  var c = sh.getRange(1, CONFIG.colC, n, 1).getValues();
+  var kr = findFirstGroupRow_(sh);
+  var lastTitle = 0;
+  for (var r = 1; r <= n; r++) if (isTitle_(b[r - 1][0])) lastTitle = r;
+  var scanBottom = Math.min(lastTitle + CONFIG.scanLimit, n);
+
+  var matches = [], grp = "", sub = "", oo = oneOffMask_(b);
+  for (r = kr; r <= scanBottom; r++) {
+    var nm = b[r - 1][0];
+    if (isGroupHeader_(nm)) { grp = String(nm).toLowerCase().trim(); sub = ""; }
+    else if (isSubtitle_(nm)) { sub = String(nm).trim(); }
+    if (oo[r - 1]) continue;   // "Ühekordsed" plokk
+    if (!nm || isTitle_(nm)) continue;
+    if (String(nm).trim().toLowerCase() !== wanted.toLowerCase()) continue;
+    matches.push({ row: r, name: String(nm).trim(), group: grp, sub: sub, cur: c[r - 1][0] });
+  }
+  if (!matches.length) { ui.alert("Klienti '" + wanted + "' ei leitud grupi-sektsioonist."); return; }
+
+  var label = function (m) { return (m.group || "?") + (m.sub ? " – " + m.sub : ""); };
+
+  // 3) NIMEKAITSE: kui mitu, lase valida numbriga
+  var chosen;
+  if (matches.length === 1) {
+    chosen = matches[0];
+  } else {
+    var lst = matches.map(function (m, i) {
+      var dtxt = is1xMarker_(m.cur) ? "1x" :
+        (m.cur instanceof Date ? Utilities.formatDate(m.cur, CONFIG.tz, "dd.MM.yy") : String(m.cur));
+      return (i + 1) + ") " + m.name + " – " + label(m) + " – " + dtxt + " (rida " + m.row + ")";
+    }).join("\n");
+    var rPick = ui.prompt("Mitu klienti nimega '" + wanted + "'",
+      "Kellele makse? Sisesta number:\n\n" + lst, ui.ButtonSet.OK_CANCEL);
+    if (rPick.getSelectedButton() !== ui.Button.OK) return;
+    var idx = parseInt(String(rPick.getResponseText()).trim(), 10);
+    if (isNaN(idx) || idx < 1 || idx > matches.length) { ui.alert("Vigane number."); return; }
+    chosen = matches[idx - 1];
+  }
+
+  if (is1xMarker_(chosen.cur)) { ui.alert("'" + chosen.name + "' on \"1x\" klient – pole kuupäeva, mida pikendada."); return; }
+  var due = parseDueDate_(chosen.cur, today);
+  if (!due) { ui.alert("'" + chosen.name + "' real pole kehtivat kuupäeva."); return; }
+  var rate = CONFIG.rates[freqOf_(chosen.sub)] || 0;
+  var tag = clientTag_(chosen.group, chosen.sub);
+
+  // 4) küsi päevade arv (vähemalt 32)
+  var rDays = ui.prompt(title + " – mitu päeva?",
+    chosen.name + " (" + label(chosen) + "), praegu kehtib kuni " +
+    Utilities.formatDate(due, CONFIG.tz, "dd.MM.yy") + ".\n" +
+    "Mitu PÄEVA edasi nihutada? Vähemalt " + minDays + " (nt 2 kuud ≈ 61).",
+    ui.ButtonSet.OK_CANCEL);
+  if (rDays.getSelectedButton() !== ui.Button.OK) return;
+  var days = parseInt(String(rDays.getResponseText()).trim(), 10);
+  if (isNaN(days) || days < minDays) {
+    ui.alert("Pikema aja makse on vähemalt " + minDays + " päeva. Lühema aja jaoks muuda kuupäeva tavapäraselt.");
+    return;
+  }
+  var nd = new Date(due.getFullYear(), due.getMonth(), due.getDate() + days);
+  var ndTxt = Utilities.formatDate(nd, CONFIG.tz, "dd.MM.yy");
+
+  // 5) summa: vaikimisi tavareegel, saab muuta
+  var defAmt = feeForDates_(due, nd, rate);
+  var rAmt = ui.prompt(title + " – summa",
+    chosen.name + ": " + Utilities.formatDate(due, CONFIG.tz, "dd.MM.yy") + " → " + ndTxt +
+    " (+" + days + " päeva).\n" +
+    (rate ? "Tavahind (" + rate + " €/kuu): " + defAmt + " €.\n" : "Sagedus (1x/2x) teadmata – sisesta summa.\n") +
+    "Summa eurodes (tühjaks = " + (rate ? defAmt + " €" : "pole") + "):",
+    ui.ButtonSet.OK_CANCEL);
+  if (rAmt.getSelectedButton() !== ui.Button.OK) return;
+  var amtTxt = String(rAmt.getResponseText()).trim().replace(",", ".").replace(/€/g, "").trim();
+  var amount = amtTxt === "" ? defAmt : parseFloat(amtTxt);
+  if (isNaN(amount) || amount <= 0) { ui.alert("Vigane summa."); return; }
+
+  // 6) topeltmaksete kaitse: kas sel kliendil on hiljuti juba kuumakse logis?
+  var seaded = settingsSheet_();
+  if (!seaded) { ui.alert("'" + CONFIG.settingsTab + "' lehte ei leitud – makset ei saa logida."); return; }
+  var recent = recentMonthlyPays_(seaded, midnight_(today), CONFIG.dupGuardDays);
+  var pk = payKey_(chosen.name, tag);
+  if (recent[pk] != null) {
+    var resp = ui.alert(title + " – topeltmakse?",
+      chosen.name + " (" + chosen.group + ") kohta on logis juba kuumakse " +
+      Utilities.formatDate(new Date(recent[pk]), CONFIG.tz, "dd.MM.yy") + ".\n" +
+      "Kas see on UUS makse ja login ikkagi " + amount + " €?", ui.ButtonSet.YES_NO);
+    if (resp !== ui.Button.YES) return;
+  }
+
+  var lock = LockService.getDocumentLock();
+  if (!lock.tryLock(3000)) { ui.alert("Skript on hõivatud, proovi hetke pärast."); return; }
+  try {
+    // a) logi enne teiste klientide ootel kuupäevamuutused (muidu kaoks need snapshotiga)
+    try { logPaymentsFromDateDiff_(sh, midnight_(today)); } catch (e) {}
+
+    // b) rida võis vahepeal liikuda -> kontrolli nime
+    if (String(sh.getRange(chosen.row, CONFIG.colB).getValue()).trim() !== chosen.name) {
+      ui.alert("Rida muutus vahepeal – proovi uuesti."); return;
+    }
+    var cell = sh.getRange(chosen.row, CONFIG.colC);
+    cell.setValue(nd);
+    cell.setBackground(daysOverdue_(nd, today) >= 1 ? CONFIG.red : null);
+    SpreadsheetApp.flush();
+
+    // c) üks makse logisse ("kuumakse" sõna sees -> topeltkaitse tunneb ära)
+    appendToLog_(seaded, [[new Date(), chosen.name, tag, amount, "pikema aja makse (kuumakse, " + days + " p)"]]);
+    try { refreshSummary_(seaded); } catch (e) {}
+
+    // d) KRIITILINE: uus baas -> öine date-diff ei näe muutust -> teist makset EI tule
+    writeSnapshotFromCur_(scanActiveClients_(sh, new Date()));
+    refreshTopList_(sh);
+
+    ui.alert("💶 Pikema aja makse tehtud:\n" +
+      "• " + chosen.name + " (" + label(chosen) + ")\n" +
+      "• " + Utilities.formatDate(due, CONFIG.tz, "dd.MM.yy") + " → " + ndTxt + " (+" + days + " päeva)\n" +
+      "• Logitud " + amount + " € (üks makse). Öine käivitus seda uuesti ei logi.");
   } finally { lock.releaseLock(); }
 }
 
