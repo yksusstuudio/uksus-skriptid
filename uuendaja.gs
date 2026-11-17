@@ -78,7 +78,7 @@ function uuenda_() {
   // Iga minut: üks väike päring. Kui hoidlas pole uut muudatust, rohkem midagi ei tehta.
   var muudatus = lae_('', 'https://api.github.com/repos/yksusstuudio/uksus-skriptid/commits/main', 'application/vnd.github.sha').trim();
   if (muudatus && omad.getProperty('muudatus') === muudatus) {
-    if (omad.getProperty('ajutine:üldine')) korras_('üldine');   // GitHub vastas jälle: varasem lühike tõrge on läbi, 24 h arvestus algab otsast
+    if (omad.getProperty('ajutine:üldine') || /"üldine:/.test(omad.getProperty('teatatud') || '')) korras_('üldine');   // GitHub vastas jälle: varasem tõrge on läbi, 24 h arvestus ja kirja mälu algavad otsast
     return 'Uut versiooni pole.';
   }
 
@@ -160,7 +160,8 @@ function lae_(tee, aadress, kuju) {
   var voti = PropertiesService.getScriptProperties().getProperty('GITHUBI_VOTI');
   var r = paring_(aadress || HOIDLA + encodeURI(tee) + '?ref=main', { muteHttpExceptions: true,
     headers: { Authorization: 'Bearer ' + voti, Accept: kuju || 'application/vnd.github.raw', 'X-GitHub-Api-Version': '2022-11-28' } });
-  if (r.getResponseCode() >= 500 || r.getResponseCode() === 429) throw viga_('GitHub oli hetkel kättesaamatu (kood ' + r.getResponseCode() + ').', 'ajutine');
+  // 422 lugemisel: GitHub ei leidnud hetkeks haru „main“ üles (nende sisemine viivitus), järgmisel minutil töötab jälle.
+  if (r.getResponseCode() >= 500 || r.getResponseCode() === 429 || r.getResponseCode() === 422) throw viga_('GitHub oli hetkel kättesaamatu (kood ' + r.getResponseCode() + ').', 'ajutine');
   if (r.getResponseCode() === 401) throw new Error('GitHubi lugemisvõti ei kehti enam (aegus või kustutati). Tee uus võti ja kirjuta see koodi ülaossa GITHUBI_VOTI reale, siis käivita „paigalda“.');
   if (r.getResponseCode() !== 200) throw new Error('Faili ' + (tee || 'muudatuste nimekiri') + ' ei saanud GitHubist kätte (kood ' + r.getResponseCode() + ').');
   return r.getContentText('UTF-8');
