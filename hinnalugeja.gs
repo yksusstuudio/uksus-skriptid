@@ -19,6 +19,8 @@
  *  v14: lapsed-rühma lapsi ei arhiveerita enam 3 nädala pärast ise (CONFIG.archiveLapsed).
  *  v14: lahtris F2 = kõigi klientide arv kõigist gruppidest kokku (2x, 1x ja
  *  Ühekordsed). Uueneb kohe, kui lisad/kustutad nime veerus B, ja igal ▶ Run / öösel.
+ *  v15.1: F3 = 2x nädalas käijate arv, F4 = 1x nädalas, F5 = piletiga ("Ühekordsed"
+ *  plokid), kõik gruppid kokku. Uuenevad samal ajal kui F2.
  *  UUS v13: lapsevanemate KORDUSMEELDETULETUS. Veerg H (linnuke) laste ridadel:
  *  kui linnuke on peal ja pääse on lõppenud (C kuupäeva pole uuendatud), saadetakse
  *  järgmisel esmaspäeva hommikul üks kordusmeeldetuletus Stebby linkidega.
@@ -60,6 +62,7 @@ var CONFIG = {
   colE: 5, colF: 6, colG: 7,   // E=meeldetuletaja(email), F=keel, G=lapsevanema nimi
   colH: 8,                     // v13: H=kordusmeeldetuletuse linnuke (ainult lapsed)
   countCell: "F2",             // v14: kõigi klientide arv kokku
+  countCells2x1xOne: ["F3", "F4", "F5"],   // v15.1: 2x nädalas / 1x nädalas / piletiga (Ühekordsed)
   topListStartRow: 4,          // varuvariant, kui silti "Tasuda Tuleb" ei leitud
   labels: { dropIn: "ühekordsed", dueList: "tasuda tuleb" },
   scanLimit: 15,
@@ -789,7 +792,10 @@ function main_(quiet, doLog) {
  * Loeb sama ala mis muu loogika (esimesest grupist kuni scanLimit rida pärast viimast
  * pealkirja) + viimase grupi "Ühekordsed" ploki järjestikused read. Pealkirju, "Nimi"
  * ridu ja ülemist "Tasuda tuleb" nimekirja ei loe. Kui F2-s on muu tekst, ei kirjuta üle. */
-function countClients_(sh) {
+function countClients_(sh) { return countClientsByType_(sh).total; }
+/* v15.1: { total, x2, x1, oneOff } – sagedus tuleb viimasest "... nädalas" alapealkirjast,
+ * "Ühekordsed" ploki read lähevad oneOff alla. */
+function countClientsByType_(sh) {
   var n = sh.getLastRow();
   var b = sh.getRange(1, CONFIG.colB, n, 1).getValues();
   var lastTitle = 0;
@@ -801,11 +807,21 @@ function countClients_(sh) {
     return !!v && String(v).trim() !== "" && !isTitle_(v) && !isOneOffHeader_(v) &&
            String(v).trim().toLowerCase() !== "nimi";
   };
-  var count = 0;
-  for (r = kr; r <= scanBottom; r++) if (isClient(b[r - 1][0])) count++;
+  var res = { total: 0, x2: 0, x1: 0, oneOff: 0 }, sub = "";
+  for (r = kr; r <= scanBottom; r++) {
+    var v = b[r - 1][0];
+    if (isGroupHeader_(v)) sub = "";
+    else if (isSubtitle_(v)) sub = String(v);
+    if (!isClient(v)) continue;
+    res.total++;
+    if (oo[r - 1]) { res.oneOff++; continue; }
+    var f = freqOf_(sub);
+    if (f === 2) res.x2++;
+    else if (f === 1) res.x1++;
+  }
   // viimase grupi "Ühekordsed" plokk võib ulatuda skaneeritavast alast välja
-  for (r = scanBottom + 1; r <= n && oo[r - 1] && isClient(b[r - 1][0]); r++) count++;
-  return count;
+  for (r = scanBottom + 1; r <= n && oo[r - 1] && isClient(b[r - 1][0]); r++) { res.total++; res.oneOff++; }
+  return res;
 }
 /* v14: loob igasse trennigruppi (kalisteenika, swed, alfa kolmik, lapsed) "Ühekordsed"
  * ploki, kui seda veel pole. Tehakse AINULT ÜKS kord (mälu: ONEOFF_BLOCKS_DONE), et
@@ -861,9 +877,21 @@ function updateClientCount_(sh) {
   var cell = sh.getRange(CONFIG.countCell);
   var cur = cell.getValue();
   if (cur !== "" && cur !== null && typeof cur !== "number") return;   // võõras sisu -> ei puutu
-  var cnt = countClients_(sh);
-  if (cur !== cnt) cell.setValue(cnt);
+  var res = countClientsByType_(sh);
+  if (cur !== res.total) cell.setValue(res.total);
   if (!cell.getNote()) cell.setNote("Kliente kokku kõigis gruppides (2x, 1x, Ühekordsed). Uueneb ise.");
+  // v15.1: F3/F4/F5 = 2x nädalas / 1x nädalas / piletiga
+  var vals = [res.x2, res.x1, res.oneOff];
+  var notes = ["2x nädalas käijaid kõigis gruppides. Uueneb ise.",
+               "1x nädalas käijaid kõigis gruppides. Uueneb ise.",
+               "Ühekordsete piletitega (\"Ühekordsed\" plokid) kõigis gruppides. Uueneb ise."];
+  for (var i = 0; i < CONFIG.countCells2x1xOne.length; i++) {
+    var c2 = sh.getRange(CONFIG.countCells2x1xOne[i]);
+    var v2 = c2.getValue();
+    if (v2 !== "" && v2 !== null && typeof v2 !== "number") continue;   // võõras sisu -> ei puutu
+    if (v2 !== vals[i]) c2.setValue(vals[i]);
+    if (!c2.getNote()) c2.setNote(notes[i]);
+  }
 }
 
 function ensureDropInVisual_(sh) {
