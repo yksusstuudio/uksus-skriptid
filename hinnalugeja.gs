@@ -21,6 +21,7 @@
  *  Ühekordsed). Uueneb kohe, kui lisad/kustutad nime veerus B, ja igal ▶ Run / öösel.
  *  v15.1: F3 = 2x nädalas käijate arv, F4 = 1x nädalas, F5 = piletiga ("Ühekordsed"
  *  plokid), kõik gruppid kokku. Uuenevad samal ajal kui F2.
+ *  v15.2: F2–F5 uuenevad ka tabeli avamisel (ei pea ootama ööd ega nime muutmist).
  *  UUS v13: lapsevanemate KORDUSMEELDETULETUS. Veerg H (linnuke) laste ridadel:
  *  kui linnuke on peal ja pääse on lõppenud (C kuupäeva pole uuendatud), saadetakse
  *  järgmisel esmaspäeva hommikul üks kordusmeeldetuletus Stebby linkidega.
@@ -163,6 +164,9 @@ function onOpen() {
       updateClientCount_(shO);
     } catch (eO) {}
   }
+  // v15.2: F2–F5 arvud uuenevad ka iga kord, kui tabel avatakse (muidu ainult
+  // nime muutmisel veerus B või ▶ Run / öösel – uus kood jäi seni tühjaks)
+  try { updateClientCount_(getSheet_()); } catch (eCnt) {}
   if (p.getProperty("ARCHIVE_PENDING") === "yes") {
     SpreadsheetApp.getActiveSpreadsheet()
       .toast(p.getProperty("ARCHIVE_NAMES") || "", "Need kliendid on arhiveeritud:", 20);
