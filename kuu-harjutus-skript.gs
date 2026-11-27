@@ -3656,6 +3656,7 @@ function kiire_() {
         if (!pub) return;
         try { var pl = plaan_(privaatne_()); autoPaus_(pub, pl, tana_()); } catch (e) { Logger.log('Automaatne paus: ' + e.message); }
         try { pausidOosel_(pub); } catch (e) { Logger.log('Pausid: ' + e.message); }
+        try { eesmarkUuesti_(); } catch (e) { Logger.log('Eesmärk täis uuesti: ' + e.message); }
         tekstid_(pub);
         lisaVorming_(pub);                                   // enne muud, et üks ebaõnnestunud samm seda ei takistaks
         topeltElus_(g);
@@ -3670,6 +3671,16 @@ function kiire_() {
     Logger.log('Kiire uuendus: ' + jai + ' grupp(i) jäi ajapuudusel järgmisele minutile.');
     PropertiesService.getScriptProperties().deleteProperty('KIIRE_TEHTUD');
   }
+}
+
+// Erik 27.11: novembri „Eesmärk täis“ kiri tuli sekundites („38 820 sekundit“). Pärast parandust (tunnid ja minutid) saadab
+// hommikune käivitus (kell 10) selle kirja uue tekstiga veel ühe korra, ainult grupile, kellele see oli juba saadetud. Käib korra.
+var EESMARK_UUESTI = '2026-11';
+function eesmarkUuesti_() {
+  var props = props_(), d = ymd_(tana_());
+  if (props.getProperty('EESMARK_UUESTI') === EESMARK_UUESTI) return;
+  props.setProperty('EESMARK_UUESTI', EESMARK_UUESTI);
+  if (d[0] + '-' + d[1] === EESMARK_UUESTI) props.deleteProperty('eesmark:' + EESMARK_UUESTI);
 }
 
 function autoJargmine_(ms) {
@@ -4422,7 +4433,7 @@ null
 "DCE1E8": "E6DED3"
 }
 };
-var EHITUS = '7f0186902085';
+var EHITUS = '1d9b95b702de';
 var KH_XLSX = [
   "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",
